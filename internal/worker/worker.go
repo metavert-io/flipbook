@@ -34,6 +34,7 @@ type workerDB interface {
 	HeartbeatJob(ctx context.Context, jobID, workerID string, leaseDuration time.Duration, progress int, message string) error
 	CompleteJob(ctx context.Context, jobID, workerID string) error
 	FailJob(ctx context.Context, jobID, workerID, failure string, baseBackoff, maxBackoff time.Duration) error
+	FailJobPermanently(ctx context.Context, jobID, workerID, failure string) error
 	CancelJob(ctx context.Context, jobID string) error
 	RetryJob(ctx context.Context, jobID string) error
 

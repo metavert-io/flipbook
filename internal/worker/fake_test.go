@@ -183,6 +183,22 @@ func (f *fakeDB) FailJob(_ context.Context, jobID, workerID, failure string, bas
 	return nil
 }
 
+func (f *fakeDB) FailJobPermanently(_ context.Context, jobID, workerID, failure string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	job := f.jobs[jobID]
+	if job == nil || job.Status != models.JobRunning || job.LeaseOwner != workerID {
+		return errors.New("lease lost")
+	}
+	job.LastError = failure
+	if job.CancelRequested {
+		job.Status = models.JobCancelled
+	} else {
+		job.Status = models.JobDead
+	}
+	return nil
+}
+
 func (f *fakeDB) CancelJob(_ context.Context, jobID string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

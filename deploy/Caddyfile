@@ -24,8 +24,8 @@
 		}
 		reverse_proxy localhost:8090 {
 			transport http {
-				read_timeout 10m
-				write_timeout 10m
+				read_timeout 30m
+				write_timeout 30m
 			}
 		}
 	}
@@ -45,8 +45,8 @@
 		}
 		reverse_proxy localhost:8090 {
 			transport http {
-				read_timeout 10m
-				write_timeout 10m
+				read_timeout 30m
+				write_timeout 30m
 			}
 		}
 	}

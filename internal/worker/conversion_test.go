@@ -179,3 +179,19 @@ func TestConversionCancellationIsRecorded(t *testing.T) {
 		t.Fatalf("cancelled job status = %s", db.jobs[job.ID].Status)
 	}
 }
+
+func TestPermanentConversionFailureIsNotRetried(t *testing.T) {
+	db, store, sourcePath := conversionSetup(t)
+	conv := &fakeConverter{fn: func(context.Context, string, string) (*converter.Result, error) {
+		return nil, &converter.ConversionError{Kind: converter.ErrQuotaExceeded, Op: "pixel limit", Cause: errors.New("too many pixels")}
+	}}
+	worker := testWorker(t, db, store, conv)
+	job := conversionJob(db, worker, sourcePath)
+
+	if err := worker.processLeased(context.Background(), job); err == nil {
+		t.Fatal("expected conversion failure")
+	}
+	if got := db.jobs[job.ID]; got.Status != models.JobDead || got.Attempts >= got.MaxAttempts {
+		t.Fatalf("job status = %s after attempt %d/%d, want dead without exhausting attempts", got.Status, got.Attempts, got.MaxAttempts)
+	}
+}

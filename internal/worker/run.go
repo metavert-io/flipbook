@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/metavert-io/flipbook/internal/converter"
 	"github.com/metavert-io/flipbook/internal/models"
 )
 
@@ -138,7 +139,13 @@ func (w *Worker) processLeased(ctx context.Context, job *models.Job) error {
 	defer completionCancel()
 	if err != nil {
 		failure := boundedError(err)
-		if failErr := w.db.FailJob(completionCtx, job.ID, w.opts.WorkerID, failure, w.opts.RetryBackoff, w.opts.MaxRetryBackoff); failErr != nil {
+		var failErr error
+		if isPermanentFailure(err) {
+			failErr = w.db.FailJobPermanently(completionCtx, job.ID, w.opts.WorkerID, failure)
+		} else {
+			failErr = w.db.FailJob(completionCtx, job.ID, w.opts.WorkerID, failure, w.opts.RetryBackoff, w.opts.MaxRetryBackoff)
+		}
+		if failErr != nil {
 			return errors.Join(err, fmt.Errorf("record job failure: %w", failErr))
 		}
 		return err
@@ -221,6 +228,23 @@ func waitContext(ctx context.Context, duration time.Duration) bool {
 	case <-timer.C:
 		return true
 	}
+}
+
+// isPermanentFailure reports conversion errors caused by the input document or
+// configured limits. Retrying them reruns the whole conversion for the same
+// result, so the job is failed immediately instead.
+func isPermanentFailure(err error) bool {
+	for _, kind := range []error{
+		converter.ErrUnsupportedFormat,
+		converter.ErrEncryptedPDF,
+		converter.ErrQuotaExceeded,
+		converter.ErrInvalidOptions,
+	} {
+		if errors.Is(err, kind) {
+			return true
+		}
+	}
+	return false
 }
 
 func boundedError(err error) string {

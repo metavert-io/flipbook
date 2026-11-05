@@ -140,9 +140,12 @@ func (h *SaaSAPIHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	r.Body = http.MaxBytesReader(w, r.Body, h.maxUploadSize)
+	// Allow 1MB for multipart framing and form fields on top of the file.
+	r.Body = http.MaxBytesReader(w, r.Body, h.maxUploadSize+(1<<20))
 
-	if err := r.ParseMultipartForm(h.maxUploadSize); err != nil {
+	// Keep at most 32MB in memory; larger files spill to a temp file instead
+	// of being buffered whole in RAM.
+	if err := r.ParseMultipartForm(32 << 20); err != nil {
 		jsonError(w, fmt.Sprintf("File too large (max %dMB)", h.maxUploadSize/(1<<20)), 400)
 		return
 	}

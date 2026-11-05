@@ -402,9 +402,12 @@ func runServer() {
 
 	// Start server
 	srv := &http.Server{
-		Addr:              ":" + cfg.Port,
-		Handler:           r,
-		ReadTimeout:       5 * time.Minute,
+		Addr:    ":" + cfg.Port,
+		Handler: r,
+		// Uploads of up to max_upload_size go through the request body; the
+		// admin UI allows 30 minutes, so 5 minutes cut off large uploads on
+		// slower connections. ReadHeaderTimeout still guards slowloris.
+		ReadTimeout:       30 * time.Minute,
 		WriteTimeout:      10 * time.Minute,
 		IdleTimeout:       120 * time.Second,
 		ReadHeaderTimeout: 10 * time.Second,

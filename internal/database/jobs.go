@@ -156,6 +156,16 @@ func (d *DB) CompleteJob(ctx context.Context, jobID, workerID string) error {
 }
 
 func (d *DB) FailJob(ctx context.Context, jobID, workerID, failure string, baseBackoff, maxBackoff time.Duration) error {
+	return d.failJob(ctx, jobID, workerID, failure, baseBackoff, maxBackoff, false)
+}
+
+// FailJobPermanently records a failure that retrying cannot fix (bad input,
+// quota exceeded) and marks the job dead without spending remaining attempts.
+func (d *DB) FailJobPermanently(ctx context.Context, jobID, workerID, failure string) error {
+	return d.failJob(ctx, jobID, workerID, failure, 0, 0, true)
+}
+
+func (d *DB) failJob(ctx context.Context, jobID, workerID, failure string, baseBackoff, maxBackoff time.Duration, permanent bool) error {
 	job, err := d.GetJob(ctx, jobID)
 	if err != nil {
 		return err
@@ -169,7 +179,7 @@ func (d *DB) FailJob(ctx context.Context, jobID, workerID, failure string, baseB
 	if job.CancelRequested {
 		status = models.JobCancelled
 		runAt = now
-	} else if job.Attempts >= job.MaxAttempts {
+	} else if permanent || job.Attempts >= job.MaxAttempts {
 		status = models.JobDead
 		runAt = now
 	}
