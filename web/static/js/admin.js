@@ -4,7 +4,7 @@ document.documentElement.classList.add('js');
 
 (function () {
     var pollingInterval = 1500;
-    var pollingTimeout = 15 * 60 * 1000;
+    var pollingTimeout = 60 * 60 * 1000;
 
     function byId(id) {
         return document.getElementById(id);
@@ -426,6 +426,9 @@ document.documentElement.classList.add('js');
             var created = 0;
             var failed = 0;
             var sequence = Promise.resolve();
+            // Uploads run one at a time, but conversions are tracked in
+            // parallel so a long conversion does not hold up the next upload.
+            var conversions = [];
             files.forEach(function (file, index) {
                 sequence = sequence.then(function () {
                     var row = createQueueRow(file, index);
@@ -442,7 +445,7 @@ document.documentElement.classList.add('js');
                             return;
                         }
                         row._conversionCell.textContent = 'Queued';
-                        return pollPublication(item.status_url || '/admin/flipbooks/' + item.id + '/status', row);
+                        conversions.push(pollPublication(item.status_url || '/admin/flipbooks/' + item.id + '/status', row));
                     }).catch(function (error) {
                         failed += 1;
                         setQueueError(row, error.message, false);
@@ -451,9 +454,11 @@ document.documentElement.classList.add('js');
                 });
             });
             sequence.then(function () {
-                byId('queue-summary').textContent = created + ' publication(s) created; ' + failed + ' file error(s). Review each row for its actual conversion state.';
                 var progress = byId('upload-progress');
                 if (progress) progress.classList.add('hidden');
+                return Promise.all(conversions);
+            }).then(function () {
+                byId('queue-summary').textContent = created + ' publication(s) created; ' + failed + ' file error(s). Review each row for its actual conversion state.';
                 if (failed) showClientError(failed + ' file(s) need attention. No failed item is reported as ready.');
                 else showClientStatus('All files were uploaded. Review the conversion results above.');
             });
