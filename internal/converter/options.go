@@ -12,6 +12,7 @@ const (
 	defaultMaxPages         = 2000
 	defaultMaxPixelsPerPage = int64(64_000_000)
 	defaultMaxTotalPixels   = int64(2_000_000_000)
+	defaultMinConversionDPI = 100
 	defaultMaxOutputBytes   = int64(8 << 30)
 	defaultMaxToolOutput    = int64(64 << 20)
 )
@@ -44,13 +45,16 @@ type ToolPaths struct {
 // Options controls conversion fidelity and resource limits. Zero values use
 // DefaultOptions. Negative quota values disable that quota.
 type Options struct {
-	ConversionDPI      int
-	ThumbnailDPI       int
-	JPEGQuality        int
-	Timeout            time.Duration
-	MaxPages           int
-	MaxPixelsPerPage   int64
-	MaxTotalPixels     int64
+	ConversionDPI    int
+	ThumbnailDPI     int
+	JPEGQuality      int
+	Timeout          time.Duration
+	MaxPages         int
+	MaxPixelsPerPage int64
+	MaxTotalPixels   int64
+	// MinConversionDPI is the lowest DPI the converter may fall back to when a
+	// document would exceed MaxTotalPixels at ConversionDPI.
+	MinConversionDPI   int
 	MaxOutputBytes     int64
 	MaxToolOutputBytes int64
 	OCR                OCRConfig
@@ -67,6 +71,7 @@ func DefaultOptions() Options {
 		MaxPages:           defaultMaxPages,
 		MaxPixelsPerPage:   defaultMaxPixelsPerPage,
 		MaxTotalPixels:     defaultMaxTotalPixels,
+		MinConversionDPI:   defaultMinConversionDPI,
 		MaxOutputBytes:     defaultMaxOutputBytes,
 		MaxToolOutputBytes: defaultMaxToolOutput,
 		OCR: OCRConfig{
@@ -106,6 +111,9 @@ func normalizeOptions(opts Options) Options {
 	if opts.MaxTotalPixels == 0 {
 		opts.MaxTotalPixels = defaults.MaxTotalPixels
 	}
+	if opts.MinConversionDPI == 0 {
+		opts.MinConversionDPI = defaults.MinConversionDPI
+	}
 	if opts.MaxOutputBytes == 0 {
 		opts.MaxOutputBytes = defaults.MaxOutputBytes
 	}
@@ -137,7 +145,7 @@ func normalizeOptions(opts Options) Options {
 }
 
 func validateOptions(opts Options) error {
-	if opts.ConversionDPI < 1 || opts.ThumbnailDPI < 1 {
+	if opts.ConversionDPI < 1 || opts.ThumbnailDPI < 1 || opts.MinConversionDPI < 1 {
 		return newConversionError(ErrInvalidOptions, "dpi must be positive", nil)
 	}
 	if opts.JPEGQuality < 1 || opts.JPEGQuality > 100 {

@@ -163,7 +163,12 @@ func runServer() {
 	store := storage.New(filepath.Join(cfg.DataDir, "flipbooks"))
 
 	// Initialize converter
-	conv := converter.New(cfg.LibreOfficeBin, filepath.Join(cfg.DataDir, "tmp"), cfg.ConversionDPI, cfg.ThumbnailDPI)
+	conversionOptions := converter.DefaultOptions()
+	conversionOptions.ConversionDPI = cfg.ConversionDPI
+	conversionOptions.ThumbnailDPI = cfg.ThumbnailDPI
+	conversionOptions.MaxTotalPixels = cfg.Conversion.MaxTotalPixels
+	conversionOptions.MinConversionDPI = cfg.Conversion.MinDPI
+	conv := converter.NewWithOptions(cfg.LibreOfficeBin, filepath.Join(cfg.DataDir, "tmp"), conversionOptions)
 
 	// Initialize worker
 	w := worker.New(db, store, conv)

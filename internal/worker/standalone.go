@@ -52,6 +52,8 @@ func RunStandalone(ctx context.Context, cfg *config.Config) error {
 	conversionOptions.Timeout = time.Duration(cfg.Conversion.TimeoutSeconds) * time.Second
 	conversionOptions.MaxPages = cfg.Conversion.MaxPages
 	conversionOptions.MaxPixelsPerPage = cfg.Conversion.MaxPagePixels
+	conversionOptions.MaxTotalPixels = cfg.Conversion.MaxTotalPixels
+	conversionOptions.MinConversionDPI = cfg.Conversion.MinDPI
 	conversionOptions.MaxOutputBytes = cfg.Conversion.MaxDiskBytes
 	conversionOptions.OCR.Disabled = !cfg.OCR.Enabled
 	conversionOptions.OCR.Binary = cfg.OCR.TesseractBin

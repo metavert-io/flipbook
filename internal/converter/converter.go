@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -174,25 +175,18 @@ func (c *Converter) convertStaged(ctx context.Context, srcPath, stagingDir, page
 	if c.options.MaxPages > 0 && documentInfo.pageCount > c.options.MaxPages {
 		return nil, newConversionError(ErrQuotaExceeded, "page limit", fmt.Errorf("document has %d pages, limit is %d", documentInfo.pageCount, c.options.MaxPages))
 	}
-	var estimatedTotal int64
-	for i, geometry := range documentInfo.pages {
-		pixels := geometry.estimatedPixels(c.options.ConversionDPI)
-		if c.options.MaxPixelsPerPage > 0 && pixels > c.options.MaxPixelsPerPage {
-			return nil, pageConversionError(ErrQuotaExceeded, "pixel limit", i+1, fmt.Errorf("estimated %d pixels, limit is %d", pixels, c.options.MaxPixelsPerPage))
-		}
-		if mathMaxInt64-estimatedTotal < pixels {
-			return nil, newConversionError(ErrQuotaExceeded, "pixel limit", errors.New("total pixel count overflows int64"))
-		}
-		estimatedTotal += pixels
+	renderDPI, dpiWarning, err := c.fitRenderDPI(documentInfo.pages)
+	if err != nil {
+		return nil, err
 	}
-	if c.options.MaxTotalPixels > 0 && estimatedTotal > c.options.MaxTotalPixels {
-		return nil, newConversionError(ErrQuotaExceeded, "pixel limit", fmt.Errorf("estimated %d total pixels, limit is %d", estimatedTotal, c.options.MaxTotalPixels))
+	if dpiWarning != nil {
+		warnings = append(warnings, *dpiWarning)
 	}
 
 	pagesDir := filepath.Join(stagingDir, pagesBase)
 	thumbsDir := filepath.Join(stagingDir, thumbsBase)
 	renditionsDir := filepath.Join(stagingDir, "renditions")
-	renderWarnings, err := c.renderPDFPages(ctx, pdfPath, pagesDir, c.options.ConversionDPI, documentInfo.pageCount, budget)
+	renderWarnings, err := c.renderPDFPages(ctx, pdfPath, pagesDir, renderDPI, documentInfo.pageCount, budget)
 	warnings = append(warnings, renderWarnings...)
 	if err != nil {
 		return nil, err
@@ -298,7 +292,7 @@ func (c *Converter) convertStaged(ctx context.Context, srcPath, stagingDir, page
 		SourceFormat:  strings.TrimPrefix(extension, "."),
 		SourcePDF:     "converted.pdf",
 		Original:      originalName,
-		ConversionDPI: c.options.ConversionDPI,
+		ConversionDPI: renderDPI,
 		ThumbnailDPI:  c.options.ThumbnailDPI,
 		PageCount:     documentInfo.pageCount,
 		Width:         pages[0].Width,
@@ -339,6 +333,67 @@ func (c *Converter) convertStaged(ctx context.Context, srcPath, stagingDir, page
 }
 
 const mathMaxInt64 = int64(^uint64(0) >> 1)
+
+// estimateDocumentPixels returns the total pixel count for rendering every
+// page at dpi, enforcing the per-page limit along the way.
+func (c *Converter) estimateDocumentPixels(pages []pdfPageGeometry, dpi int) (int64, error) {
+	var total int64
+	for i, geometry := range pages {
+		pixels := geometry.estimatedPixels(dpi)
+		if c.options.MaxPixelsPerPage > 0 && pixels > c.options.MaxPixelsPerPage {
+			return 0, pageConversionError(ErrQuotaExceeded, "pixel limit", i+1, fmt.Errorf("estimated %d pixels at %d DPI, limit is %d", pixels, dpi, c.options.MaxPixelsPerPage))
+		}
+		if mathMaxInt64-total < pixels {
+			return 0, newConversionError(ErrQuotaExceeded, "pixel limit", errors.New("total pixel count overflows int64"))
+		}
+		total += pixels
+	}
+	return total, nil
+}
+
+// fitRenderDPI picks the page render DPI. Long documents whose pages would
+// exceed MaxTotalPixels at the configured DPI are rendered at a proportionally
+// lower DPI (never below MinConversionDPI) instead of being rejected.
+func (c *Converter) fitRenderDPI(pages []pdfPageGeometry) (int, *Warning, error) {
+	dpi := c.options.ConversionDPI
+	total, err := c.estimateDocumentPixels(pages, dpi)
+	if err != nil {
+		return 0, nil, err
+	}
+	limit := c.options.MaxTotalPixels
+	if limit <= 0 || total <= limit {
+		return dpi, nil, nil
+	}
+	requested := dpi
+	floor := c.options.MinConversionDPI
+	if floor > requested {
+		floor = requested
+	}
+	// Pixel count scales with DPI squared; step down until the estimate
+	// (which rounds each page dimension up) fits.
+	dpi = int(math.Floor(float64(dpi) * math.Sqrt(float64(limit)/float64(total))))
+	for {
+		if dpi < floor {
+			minTotal, minErr := c.estimateDocumentPixels(pages, floor)
+			if minErr != nil {
+				return 0, nil, minErr
+			}
+			return 0, nil, newConversionError(ErrQuotaExceeded, "pixel limit", fmt.Errorf("estimated %d total pixels at the minimum %d DPI (%d at %d DPI), limit is %d", minTotal, floor, total, requested, limit))
+		}
+		fitted, fitErr := c.estimateDocumentPixels(pages, dpi)
+		if fitErr != nil {
+			return 0, nil, fitErr
+		}
+		if fitted <= limit {
+			break
+		}
+		dpi--
+	}
+	return dpi, &Warning{
+		Code:    "conversion_dpi_reduced",
+		Message: fmt.Sprintf("Pages rendered at %d DPI instead of %d DPI to stay within the %d total pixel limit for %d pages.", dpi, requested, limit, len(pages)),
+	}, nil
+}
 
 func prepareStaging(stagingDir, pagesBase, thumbsBase string) error {
 	if err := os.MkdirAll(stagingDir, 0755); err != nil {

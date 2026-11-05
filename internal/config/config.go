@@ -53,6 +53,8 @@ type ConversionConfig struct {
 	TimeoutSeconds         int   `yaml:"timeout_seconds"`
 	MaxPages               int   `yaml:"max_pages"`
 	MaxPagePixels          int64 `yaml:"max_page_pixels"`
+	MaxTotalPixels         int64 `yaml:"max_total_pixels"`
+	MinDPI                 int   `yaml:"min_dpi"`
 	MaxDiskBytes           int64 `yaml:"max_disk_bytes"`
 	MaxRemoteDownloadBytes int64 `yaml:"max_remote_download_bytes"`
 }
@@ -226,6 +228,7 @@ func defaultConfig() *Config {
 			WorkerCount: 2, JobLeaseSeconds: 60, JobHeartbeatSeconds: 15,
 			MaxJobAttempts: 5, RetryBackoffSeconds: 30, MaxRetryBackoffSeconds: 3600,
 			TimeoutSeconds: 900, MaxPages: 1000, MaxPagePixels: 50000000,
+			MaxTotalPixels: 2000000000, MinDPI: 100,
 			MaxDiskBytes: 5368709120, MaxRemoteDownloadBytes: 209715200,
 		},
 		OIDC:     OIDCConfig{Scopes: []string{"openid", "profile", "email"}, GroupClaim: "groups", GroupRoles: map[string]string{}},
@@ -332,6 +335,7 @@ func (c *Config) Validate() error {
 		errs = append(errs, errors.New("conversion workers, attempts, and lease timings are invalid"))
 	}
 	if c.Conversion.MaxPages <= 0 || c.Conversion.MaxPagePixels <= 0 ||
+		c.Conversion.MaxTotalPixels <= 0 || c.Conversion.MinDPI <= 0 ||
 		c.Conversion.MaxDiskBytes <= 0 || c.Conversion.TimeoutSeconds <= 0 ||
 		c.Conversion.MaxRemoteDownloadBytes <= 0 || c.Conversion.RetryBackoffSeconds <= 0 ||
 		c.Conversion.MaxRetryBackoffSeconds < c.Conversion.RetryBackoffSeconds {
@@ -484,6 +488,8 @@ func (b *envBinder) apply(c *Config) {
 	b.int("FLIPBOOK_CONVERSION_TIMEOUT_SECONDS", &c.Conversion.TimeoutSeconds)
 	b.int("FLIPBOOK_CONVERSION_MAX_PAGES", &c.Conversion.MaxPages)
 	b.int64("FLIPBOOK_CONVERSION_MAX_PAGE_PIXELS", &c.Conversion.MaxPagePixels)
+	b.int64("FLIPBOOK_CONVERSION_MAX_TOTAL_PIXELS", &c.Conversion.MaxTotalPixels)
+	b.int("FLIPBOOK_CONVERSION_MIN_DPI", &c.Conversion.MinDPI)
 	b.int64("FLIPBOOK_CONVERSION_MAX_DISK_BYTES", &c.Conversion.MaxDiskBytes)
 	b.int64("FLIPBOOK_CONVERSION_MAX_REMOTE_DOWNLOAD_BYTES", &c.Conversion.MaxRemoteDownloadBytes)
 
