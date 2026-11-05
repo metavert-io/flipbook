@@ -495,8 +495,10 @@ document.documentElement.classList.add('js');
     function initDetailPolling() {
         var container = document.querySelector('[data-poll-container]');
         if (!container) return;
-        var initiallyActive = container.getAttribute('data-current-status') !== 'ready' || container.querySelector('.badge-job-queued, .badge-job-running, .badge-job-retry, .badge-pending, .badge-converting');
+        var renderedStatus = container.getAttribute('data-current-status');
+        var initiallyActive = renderedStatus !== 'ready' || container.querySelector('.badge-job-queued, .badge-job-running, .badge-job-retry, .badge-pending, .badge-converting');
         if (!initiallyActive) return;
+        var sawActiveJob = false;
         var heading = container.querySelector('[data-status-heading]');
         var message = container.querySelector('[data-status-message]');
         var network = container.querySelector('[data-poll-network]');
@@ -516,7 +518,11 @@ document.documentElement.classList.add('js');
                 if (heading) heading.textContent = 'Conversion status: ' + data.status;
                 if (message && data.status !== 'ready') message.textContent = data.error || 'The worker is still processing this publication.';
                 var job = activeJob(data.jobs);
+                if (job) sawActiveJob = true;
                 if (!job && (data.status === 'ready' || data.status === 'error')) {
+                    // Reload only for a result this page has not shown yet. A publication
+                    // that was already in this state would otherwise reload forever.
+                    if (data.status === renderedStatus && !sawActiveJob) return;
                     if (message && data.status === 'ready') message.textContent = data.page_count + ' pages converted.';
                     window.setTimeout(function () { window.location.reload(); }, 600);
                     return;
