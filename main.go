@@ -305,9 +305,14 @@ func runServer() {
 
 	// In admin mode, populate the session principal on the public reader routes
 	// so signed-in staff can preview unpublished publications.
+	// Build from the full config: HTTPS mode, base URL and trusted proxies
+	// decide the expected Origin on login/CSRF checks behind the TLS proxy.
 	var adminAuth *auth.Auth
 	if !cfg.SaaS.Enabled {
-		adminAuth = auth.New(db, cfg.SessionSecret, tmpl)
+		adminAuth, err = auth.NewWithConfig(db, cfg, tmpl)
+		if err != nil {
+			log.Fatalf("Admin authentication: %v", err)
+		}
 	}
 
 	// Setup router

@@ -3,7 +3,6 @@ package auth
 import (
 	"context"
 	"errors"
-	"html/template"
 	"net/http"
 	"strconv"
 	"strings"
@@ -18,11 +17,6 @@ var dummyPasswordHash = func() string {
 	hash, _ := bcrypt.GenerateFromPassword([]byte("dummy-password-for-timing"), bcryptCost)
 	return string(hash)
 }()
-
-func New(db *database.DB, secret string, tmpl *template.Template) *Auth {
-	auth, _ := newAuth(db, tmpl, Options{SessionSecret: secret})
-	return auth
-}
 
 func (a *Auth) localPasswordStatus() (bool, error) {
 	if a == nil || a.initErr != nil {
