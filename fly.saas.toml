@@ -18,7 +18,7 @@ primary_region = "iad"
   DATABASE_NAME = "flipbook"
   FRONTEND_STATIC_DIR = "/dev/null"
   SERVER_PORT = "8091"
-  FRONTEND_URL = "https://flipbook.dev.nextdigital.is"
+  FRONTEND_URL = "https://bok.bodberi.com"
   APP_NAME = "Penninn Midlun"
 
 [http_service]

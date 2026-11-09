@@ -427,14 +427,21 @@ func runServer() {
 	log.Printf("Base URL: %s", cfg.BaseURL)
 	log.Printf("LibreOffice: %s", cfg.LibreOfficeBin)
 
-	// Graceful shutdown
+	// Graceful shutdown. Workers are cancelled first so in-flight conversions
+	// stop; HTTP then drains with a deadline so a hung connection can't block
+	// shutdown forever (Fly escalates to SIGKILL, but we exit cleanly first).
 	go func() {
 		sigCh := make(chan os.Signal, 1)
 		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 		<-sigCh
 		log.Println("Shutting down...")
 		cancel()
-		srv.Shutdown(context.Background())
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer shutdownCancel()
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			log.Printf("Graceful shutdown timed out: %v", err)
+			os.Exit(1)
+		}
 	}()
 
 	if err := srv.ListenAndServe(); err != http.ErrServerClosed {
@@ -513,7 +520,7 @@ func setupAdminMode(r chi.Router, cfg *config.Config, db *database.DB, store *st
 	})
 
 	log.Printf("Admin UI:  %s/admin", cfg.BaseURL)
-	log.Printf("API key:   %s", cfg.APIKey)
+	log.Printf("API key:   %s", apiKeyStatus(cfg))
 }
 
 // registerFeatureRoutes mounts the analytics, leads, sales, and integrations
@@ -629,7 +636,19 @@ func setupSaaSMode(r chi.Router, cfg *config.Config, db *database.DB, store *sto
 	}
 
 	log.Printf("SaaS mode enabled (grace period: %d days)", cfg.SaaS.GracePeriodDays)
-	log.Printf("API key (admin): %s", cfg.APIKey)
+	log.Printf("API key (admin): %s", apiKeyStatus(cfg))
+}
+
+// apiKeyStatus describes how the admin API key was configured without
+// revealing the secret itself in logs.
+func apiKeyStatus(cfg *config.Config) string {
+	if cfg.APIKeyGenerated {
+		return "auto-generated (set FLIPBOOK_API_KEY to keep it stable across restarts)"
+	}
+	if cfg.APIKey == "" {
+		return "not configured"
+	}
+	return "configured"
 }
 
 // spaHandler serves a single-page application. Existing files are served

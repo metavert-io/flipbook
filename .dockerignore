@@ -17,6 +17,10 @@ config.dev.yaml
 # OS
 .DS_Store
 
+# Environment files with secrets — never enter the Docker build context
+.env
+.env.*
+
 # Git
 .git/
 .gitignore
