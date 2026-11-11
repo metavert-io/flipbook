@@ -2,6 +2,7 @@ package converter
 
 import (
 	"context"
+	"runtime"
 	"time"
 )
 
@@ -15,6 +16,8 @@ const (
 	defaultMinConversionDPI = 100
 	defaultMaxOutputBytes   = int64(8 << 30)
 	defaultMaxToolOutput    = int64(64 << 20)
+	defaultPageTimeout      = 30 * time.Second
+	maxRenderConcurrency    = 4
 )
 
 // OCRConfig controls the fallback used for pages without embedded text.
@@ -59,6 +62,15 @@ type Options struct {
 	MaxToolOutputBytes int64
 	OCR                OCRConfig
 	Tools              ToolPaths
+
+	// PageTimeout is added to Timeout for every page once the page count is
+	// known, so long documents are not held to the same budget as a short
+	// deck. Negative keeps the base Timeout for every document.
+	PageTimeout time.Duration
+	// RenderConcurrency is the number of pages rendered at once. Each
+	// in-flight page holds one Poppler process and one decoded page bitmap in
+	// memory (about 150 MB for a 300 DPI double-page spread).
+	RenderConcurrency int
 }
 
 // DefaultOptions returns the production defaults used by New.
@@ -68,6 +80,8 @@ func DefaultOptions() Options {
 		ThumbnailDPI:       defaultThumbnailDPI,
 		JPEGQuality:        defaultJPEGQuality,
 		Timeout:            10 * time.Minute,
+		PageTimeout:        defaultPageTimeout,
+		RenderConcurrency:  defaultRenderConcurrency(),
 		MaxPages:           defaultMaxPages,
 		MaxPixelsPerPage:   defaultMaxPixelsPerPage,
 		MaxTotalPixels:     defaultMaxTotalPixels,
@@ -101,6 +115,12 @@ func normalizeOptions(opts Options) Options {
 	}
 	if opts.Timeout == 0 {
 		opts.Timeout = defaults.Timeout
+	}
+	if opts.PageTimeout == 0 {
+		opts.PageTimeout = defaults.PageTimeout
+	}
+	if opts.RenderConcurrency == 0 {
+		opts.RenderConcurrency = defaults.RenderConcurrency
 	}
 	if opts.MaxPages == 0 {
 		opts.MaxPages = defaults.MaxPages
@@ -157,5 +177,22 @@ func validateOptions(opts Options) error {
 	if opts.OCR.MinTextRunes < 0 {
 		return newConversionError(ErrInvalidOptions, "OCR minimum text runes cannot be negative", nil)
 	}
+	if opts.RenderConcurrency < 1 || opts.RenderConcurrency > 64 {
+		return newConversionError(ErrInvalidOptions, "render concurrency must be between 1 and 64", nil)
+	}
 	return nil
+}
+
+// defaultRenderConcurrency uses the CPUs available to the process (Go sizes
+// GOMAXPROCS to the container's CPU quota), capped to keep peak memory of
+// concurrent 300 DPI page bitmaps bounded.
+func defaultRenderConcurrency() int {
+	n := runtime.GOMAXPROCS(0)
+	if n > maxRenderConcurrency {
+		n = maxRenderConcurrency
+	}
+	if n < 1 {
+		n = 1
+	}
+	return n
 }

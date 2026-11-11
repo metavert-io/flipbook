@@ -19,6 +19,33 @@ func NewWithConfig(db *database.DB, store *storage.Storage, conv *converter.Conv
 	return NewWithOptions(db, store, conv, OptionsFromConfig(cfg.Conversion, cfg.Webhooks))
 }
 
+// ConverterOptions maps the conversion configuration onto converter options.
+// The server's in-process worker and the standalone worker both use it so a
+// setting means the same thing whichever process runs the conversion.
+func ConverterOptions(cfg *config.Config) converter.Options {
+	options := converter.DefaultOptions()
+	options.ConversionDPI = cfg.ConversionDPI
+	options.ThumbnailDPI = cfg.ThumbnailDPI
+	options.Timeout = time.Duration(cfg.Conversion.TimeoutSeconds) * time.Second
+	options.PageTimeout = time.Duration(cfg.Conversion.PageTimeoutSeconds) * time.Second
+	options.RenderConcurrency = cfg.Conversion.RenderConcurrency
+	if options.RenderConcurrency < 0 || options.RenderConcurrency > 64 {
+		// config.Validate rejects this; the server loads config leniently, so
+		// fall back to automatic rather than fail every conversion.
+		options.RenderConcurrency = 0
+	}
+	options.MaxPages = cfg.Conversion.MaxPages
+	options.MaxPixelsPerPage = cfg.Conversion.MaxPagePixels
+	options.MaxTotalPixels = cfg.Conversion.MaxTotalPixels
+	options.MinConversionDPI = cfg.Conversion.MinDPI
+	options.MaxOutputBytes = cfg.Conversion.MaxDiskBytes
+	options.OCR.Disabled = !cfg.OCR.Enabled
+	options.OCR.Binary = cfg.OCR.TesseractBin
+	options.OCR.Language = cfg.OCR.Language
+	options.OCR.Timeout = time.Duration(cfg.OCR.TimeoutSeconds) * time.Second
+	return options
+}
+
 func RunStandalone(ctx context.Context, cfg *config.Config) error {
 	if cfg == nil {
 		return errors.New("worker configuration is required")
@@ -46,20 +73,7 @@ func RunStandalone(ctx context.Context, cfg *config.Config) error {
 	}
 	store := storage.NewWithOptions(filepath.Join(cfg.DataDir, "flipbooks"), storageOptions)
 
-	conversionOptions := converter.DefaultOptions()
-	conversionOptions.ConversionDPI = cfg.ConversionDPI
-	conversionOptions.ThumbnailDPI = cfg.ThumbnailDPI
-	conversionOptions.Timeout = time.Duration(cfg.Conversion.TimeoutSeconds) * time.Second
-	conversionOptions.MaxPages = cfg.Conversion.MaxPages
-	conversionOptions.MaxPixelsPerPage = cfg.Conversion.MaxPagePixels
-	conversionOptions.MaxTotalPixels = cfg.Conversion.MaxTotalPixels
-	conversionOptions.MinConversionDPI = cfg.Conversion.MinDPI
-	conversionOptions.MaxOutputBytes = cfg.Conversion.MaxDiskBytes
-	conversionOptions.OCR.Disabled = !cfg.OCR.Enabled
-	conversionOptions.OCR.Binary = cfg.OCR.TesseractBin
-	conversionOptions.OCR.Language = cfg.OCR.Language
-	conversionOptions.OCR.Timeout = time.Duration(cfg.OCR.TimeoutSeconds) * time.Second
-	conv := converter.NewWithOptions(cfg.LibreOfficeBin, filepath.Join(cfg.DataDir, "tmp"), conversionOptions)
+	conv := converter.NewWithOptions(cfg.LibreOfficeBin, filepath.Join(cfg.DataDir, "tmp"), ConverterOptions(cfg))
 
 	worker, err := NewWithOptions(db, store, conv, OptionsFromConfig(cfg.Conversion, cfg.Webhooks))
 	if err != nil {

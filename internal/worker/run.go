@@ -116,6 +116,9 @@ func (w *Worker) processLeased(ctx context.Context, job *models.Job) error {
 	if job == nil {
 		return errors.New("nil leased job")
 	}
+	if job.MaxAttempts > 0 && job.Attempts > job.MaxAttempts {
+		return w.abandonExhausted(ctx, job)
+	}
 	runCtx, cancel := context.WithCancel(ctx)
 	progress := &progressState{}
 	progress.Set(1, "leased")
@@ -164,6 +167,29 @@ func (w *Worker) processLeased(ctx context.Context, job *models.Job) error {
 		return err
 	}
 	return nil
+}
+
+// abandonExhausted handles a job leased again after its final attempt's lease
+// expired, which only happens when the worker running it died (restart,
+// deploy, or an out-of-memory kill) before recording a result.
+func (w *Worker) abandonExhausted(ctx context.Context, job *models.Job) error {
+	exhausted := fmt.Errorf("%w: the last of %d attempts stopped without recording a result; the worker was restarted or killed, for example by running out of memory", ErrAttemptsExhausted, job.MaxAttempts)
+	if job.LastError != "" {
+		exhausted = fmt.Errorf("%w; earlier error: %s", exhausted, job.LastError)
+	}
+	failure := boundedError(exhausted)
+	completionCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), w.opts.CompletionTimeout)
+	defer cancel()
+	errs := []error{exhausted}
+	if job.Type == models.JobConvert {
+		if err := w.abandonConversion(completionCtx, job, failure); err != nil {
+			errs = append(errs, fmt.Errorf("record abandoned conversion: %w", err))
+		}
+	}
+	if err := w.db.FailJobPermanently(completionCtx, job.ID, w.opts.WorkerID, failure); err != nil {
+		errs = append(errs, fmt.Errorf("record job failure: %w", err))
+	}
+	return errors.Join(errs...)
 }
 
 func (w *Worker) heartbeatLoop(ctx context.Context, cancel context.CancelFunc, job *models.Job, progress *progressState) error {
@@ -232,13 +258,16 @@ func waitContext(ctx context.Context, duration time.Duration) bool {
 
 // isPermanentFailure reports conversion errors caused by the input document or
 // configured limits. Retrying them reruns the whole conversion for the same
-// result, so the job is failed immediately instead.
+// result, so the job is failed immediately instead. That includes the
+// conversion time limit: it already scales with page count, and retrying a
+// document that exceeded it only repeats the wait several times over.
 func isPermanentFailure(err error) bool {
 	for _, kind := range []error{
 		converter.ErrUnsupportedFormat,
 		converter.ErrEncryptedPDF,
 		converter.ErrQuotaExceeded,
 		converter.ErrInvalidOptions,
+		converter.ErrTimeout,
 	} {
 		if errors.Is(err, kind) {
 			return true

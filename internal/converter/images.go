@@ -7,6 +7,7 @@ import (
 	_ "image/png"
 	"os"
 	"path/filepath"
+	"sync"
 )
 
 func detectDimensions(imagePath string) (int, int, error) {
@@ -103,7 +104,9 @@ func directorySize(root string) (int64, error) {
 	return total, err
 }
 
+// outputBudget is shared by concurrently rendering pages.
 type outputBudget struct {
+	mu    sync.Mutex
 	limit int64
 	used  int64
 }
@@ -117,6 +120,8 @@ func (b *outputBudget) add(path string) error {
 		return err
 	}
 	size := info.Size()
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	if size > mathMaxInt64-b.used {
 		return newConversionError(ErrQuotaExceeded, "disk limit", fmt.Errorf("output size overflows int64"))
 	}

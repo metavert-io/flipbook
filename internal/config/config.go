@@ -57,6 +57,13 @@ type ConversionConfig struct {
 	MinDPI                 int   `yaml:"min_dpi"`
 	MaxDiskBytes           int64 `yaml:"max_disk_bytes"`
 	MaxRemoteDownloadBytes int64 `yaml:"max_remote_download_bytes"`
+
+	// PageTimeoutSeconds is added to TimeoutSeconds for every page, so the
+	// time limit scales with document length. Negative disables the scaling.
+	PageTimeoutSeconds int `yaml:"page_timeout_seconds"`
+	// RenderConcurrency is the number of pages one conversion renders at
+	// once; 0 uses the available CPUs, up to 4.
+	RenderConcurrency int `yaml:"render_concurrency"`
 }
 
 type OIDCConfig struct {
@@ -227,7 +234,7 @@ func defaultConfig() *Config {
 		Conversion: ConversionConfig{
 			WorkerCount: 2, JobLeaseSeconds: 60, JobHeartbeatSeconds: 15,
 			MaxJobAttempts: 5, RetryBackoffSeconds: 30, MaxRetryBackoffSeconds: 3600,
-			TimeoutSeconds: 900, MaxPages: 1000, MaxPagePixels: 50000000,
+			TimeoutSeconds: 900, PageTimeoutSeconds: 30, MaxPages: 1000, MaxPagePixels: 50000000,
 			MaxTotalPixels: 2000000000, MinDPI: 100,
 			MaxDiskBytes: 5368709120, MaxRemoteDownloadBytes: 209715200,
 		},
@@ -340,6 +347,9 @@ func (c *Config) Validate() error {
 		c.Conversion.MaxRemoteDownloadBytes <= 0 || c.Conversion.RetryBackoffSeconds <= 0 ||
 		c.Conversion.MaxRetryBackoffSeconds < c.Conversion.RetryBackoffSeconds {
 		errs = append(errs, errors.New("conversion quotas, timeout, and backoff must be positive"))
+	}
+	if c.Conversion.RenderConcurrency < 0 || c.Conversion.RenderConcurrency > 64 {
+		errs = append(errs, errors.New("conversion.render_concurrency must be between 0 (automatic) and 64"))
 	}
 	if c.Security.SessionTTLSeconds <= 0 || c.Security.LoginAttemptsPerMinute <= 0 || c.Security.HSTSMaxAgeSeconds < 0 {
 		errs = append(errs, errors.New("security session, throttling, and HSTS values are invalid"))
@@ -486,6 +496,8 @@ func (b *envBinder) apply(c *Config) {
 	b.int("FLIPBOOK_CONVERSION_RETRY_BACKOFF_SECONDS", &c.Conversion.RetryBackoffSeconds)
 	b.int("FLIPBOOK_CONVERSION_MAX_RETRY_BACKOFF_SECONDS", &c.Conversion.MaxRetryBackoffSeconds)
 	b.int("FLIPBOOK_CONVERSION_TIMEOUT_SECONDS", &c.Conversion.TimeoutSeconds)
+	b.int("FLIPBOOK_CONVERSION_PAGE_TIMEOUT_SECONDS", &c.Conversion.PageTimeoutSeconds)
+	b.int("FLIPBOOK_CONVERSION_RENDER_CONCURRENCY", &c.Conversion.RenderConcurrency)
 	b.int("FLIPBOOK_CONVERSION_MAX_PAGES", &c.Conversion.MaxPages)
 	b.int64("FLIPBOOK_CONVERSION_MAX_PAGE_PIXELS", &c.Conversion.MaxPagePixels)
 	b.int64("FLIPBOOK_CONVERSION_MAX_TOTAL_PIXELS", &c.Conversion.MaxTotalPixels)

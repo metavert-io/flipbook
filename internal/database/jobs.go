@@ -113,10 +113,9 @@ func (d *DB) LeaseJobs(ctx context.Context, workerID string, types []models.JobT
 			})
 			continue
 		}
-		if job.Attempts > job.MaxAttempts {
-			_, _ = d.jobs.UpdateByID(ctx, job.ID, bson.M{"$set": bson.M{"status": models.JobDead, "last_error": "maximum attempts exceeded", "updated_at": time.Now().UTC()}})
-			continue
-		}
+		// A job past MaxAttempts is still handed out: its last attempt died
+		// with the lease held, and only the worker can close out the job's
+		// side effects (such as a flipbook left in "converting").
 		leased = append(leased, &job)
 	}
 	return leased, nil

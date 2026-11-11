@@ -15,7 +15,10 @@ import (
 	"github.com/metavert-io/flipbook/internal/storage"
 )
 
-var ErrJobCancelled = errors.New("job cancellation requested")
+var (
+	ErrJobCancelled      = errors.New("job cancellation requested")
+	ErrAttemptsExhausted = errors.New("maximum attempts exceeded")
+)
 
 type Job struct {
 	FlipbookID     string

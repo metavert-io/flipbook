@@ -33,9 +33,9 @@ func (c *Converter) pdfToPNG(ctx context.Context, pdfPath, outDir string, dpi in
 	return info.pageCount, err
 }
 
-// renderPDFPages deliberately renders one page at a time. Besides keeping
-// memory use bounded, this preserves the page-N.png names expected by legacy
-// viewers even for documents with many pages.
+// renderPDFPages renders every page of pdfPath into outDir, one page at a
+// time. ConvertStaged uses renderPDFPage directly so pages can be rendered
+// concurrently.
 func (c *Converter) renderPDFPages(ctx context.Context, pdfPath, outDir string, dpi, pageCount int, budget *outputBudget) ([]Warning, error) {
 	absOut, err := filepath.Abs(outDir)
 	if err != nil {
@@ -48,37 +48,49 @@ func (c *Converter) renderPDFPages(ctx context.Context, pdfPath, outDir string, 
 	if err := os.MkdirAll(absOut, 0755); err != nil {
 		return nil, fmt.Errorf("create output directory: %w", err)
 	}
-
 	var warnings []Warning
 	for page := 1; page <= pageCount; page++ {
-		outputPrefix := filepath.Join(absOut, fmt.Sprintf("page-%d", page))
-		result, err := c.runCommand(ctx, c.options.Tools.PDFToPPM,
-			"-singlefile",
-			"-f", strconv.Itoa(page),
-			"-l", strconv.Itoa(page),
-			"-png",
-			"-rx", strconv.Itoa(dpi),
-			"-ry", strconv.Itoa(dpi),
-			absPDF,
-			outputPrefix,
-		)
+		pageWarnings, err := c.renderPDFPage(ctx, absPDF, absOut, page, dpi, budget)
+		warnings = append(warnings, pageWarnings...)
 		if err != nil {
-			if errors.Is(err, exec.ErrNotFound) || ctx.Err() != nil {
-				return warnings, pageConversionError(nil, "pdftoppm", page, commandError(c.options.Tools.PDFToPPM, err, result))
-			}
-			return warnings, pageConversionError(ErrCorruptPDF, "pdftoppm", page, commandError(c.options.Tools.PDFToPPM, err, result))
+			return warnings, err
 		}
-		warnings = append(warnings, warningsFromCommand("pdftoppm", result.stderr, page)...)
-		outputPath := outputPrefix + ".png"
-		if info, err := os.Stat(outputPath); err != nil || info.Size() == 0 {
-			if err == nil {
-				err = errors.New("empty output file")
-			}
-			return warnings, pageConversionError(ErrArtifactValidation, "pdftoppm produced no output", page, err)
+	}
+	return warnings, nil
+}
+
+// renderPDFPage renders a single page to outDir/page-N.png. Rendering one
+// page per pdftoppm invocation keeps memory bounded and preserves the
+// page-N.png names expected by legacy viewers. absPDF and outDir must be
+// absolute and outDir must exist.
+func (c *Converter) renderPDFPage(ctx context.Context, absPDF, outDir string, page, dpi int, budget *outputBudget) ([]Warning, error) {
+	outputPrefix := filepath.Join(outDir, fmt.Sprintf("page-%d", page))
+	result, err := c.runCommand(ctx, c.options.Tools.PDFToPPM,
+		"-singlefile",
+		"-f", strconv.Itoa(page),
+		"-l", strconv.Itoa(page),
+		"-png",
+		"-rx", strconv.Itoa(dpi),
+		"-ry", strconv.Itoa(dpi),
+		absPDF,
+		outputPrefix,
+	)
+	if err != nil {
+		if errors.Is(err, exec.ErrNotFound) || ctx.Err() != nil {
+			return nil, pageConversionError(nil, "pdftoppm", page, commandError(c.options.Tools.PDFToPPM, err, result))
 		}
-		if err := budget.add(outputPath); err != nil {
-			return warnings, pageConversionError(nil, "disk limit", page, err)
+		return nil, pageConversionError(ErrCorruptPDF, "pdftoppm", page, commandError(c.options.Tools.PDFToPPM, err, result))
+	}
+	warnings := warningsFromCommand("pdftoppm", result.stderr, page)
+	outputPath := outputPrefix + ".png"
+	if info, err := os.Stat(outputPath); err != nil || info.Size() == 0 {
+		if err == nil {
+			err = errors.New("empty output file")
 		}
+		return warnings, pageConversionError(ErrArtifactValidation, "pdftoppm produced no output", page, err)
+	}
+	if err := budget.add(outputPath); err != nil {
+		return warnings, pageConversionError(nil, "disk limit", page, err)
 	}
 	return warnings, nil
 }

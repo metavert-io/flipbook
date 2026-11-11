@@ -59,17 +59,7 @@ func (w *Worker) processConversion(ctx context.Context, job *models.Job, progres
 		if returnErr == nil || activated {
 			return
 		}
-		message := boundedError(returnErr)
-		if err := w.db.MarkRevisionFailed(context.WithoutCancel(ctx), revision.ID, message); err != nil {
-			w.logger.Printf("[worker] mark revision %s failed: %v", revision.ID, err)
-		}
-		status := models.StatusError
-		if liveRevision != nil {
-			status = models.StatusReady
-		}
-		if err := w.db.UpdateStatus(flipbook.ID, status, message); err != nil {
-			w.logger.Printf("[worker] update flipbook %s failure status: %v", flipbook.ID, err)
-		}
+		w.markConversionFailed(context.WithoutCancel(ctx), flipbook.ID, revision.ID, liveRevision != nil, boundedError(returnErr))
 	}()
 
 	if liveRevision == nil {
@@ -172,6 +162,38 @@ func (w *Worker) processConversion(ctx context.Context, job *models.Job, progres
 	return nil
 }
 
+// markConversionFailed records a failed conversion on the revision and the
+// flipbook. A flipbook that still has a live revision stays ready and only
+// carries the error message.
+func (w *Worker) markConversionFailed(ctx context.Context, flipbookID, revisionID string, keepLive bool, message string) {
+	if err := w.db.MarkRevisionFailed(ctx, revisionID, message); err != nil {
+		w.logger.Printf("[worker] mark revision %s failed: %v", revisionID, err)
+	}
+	status := models.StatusError
+	if keepLive {
+		status = models.StatusReady
+	}
+	if err := w.db.UpdateStatus(flipbookID, status, message); err != nil {
+		w.logger.Printf("[worker] update flipbook %s failure status: %v", flipbookID, err)
+	}
+}
+
+// abandonConversion closes out a conversion whose final attempt died without
+// recording a result, so the publication shows an error instead of staying in
+// "converting" with no worker behind it.
+func (w *Worker) abandonConversion(ctx context.Context, job *models.Job, message string) error {
+	flipbook, err := w.db.GetFlipbookInWorkspace(ctx, job.WorkspaceID, job.FlipbookID)
+	if err != nil {
+		return err
+	}
+	if flipbook.Status == models.StatusReady && flipbook.CurrentRevisionID == job.RevisionID {
+		// The attempt activated its revision before it died; nothing failed.
+		return nil
+	}
+	w.markConversionFailed(ctx, flipbook.ID, job.RevisionID, flipbook.Status == models.StatusReady, message)
+	return nil
+}
+
 func (w *Worker) liveRevision(_ context.Context, flipbook *models.Flipbook) *models.Revision {
 	if flipbook.Status != models.StatusReady {
 		return nil
@@ -224,7 +246,8 @@ func (w *Worker) renderRevision(ctx context.Context, job *models.Job, flipbook *
 		return nil, "", err
 	}
 	w.setRevisionProgress(ctx, revision.ID, progress, 10, "rendering pages")
-	if _, err := w.conv.ConvertStaged(ctx, source.Path, stagingDir); err != nil {
+	convertCtx := converter.WithProgress(ctx, w.conversionProgress(ctx, revision.ID, progress))
+	if _, err := w.conv.ConvertStaged(convertCtx, source.Path, stagingDir); err != nil {
 		return nil, "", err
 	}
 	progress.Set(75, "rendering complete")
@@ -302,6 +325,43 @@ func sourceMatches(source sourceInfo, checksum string, size int64) bool {
 		return false
 	}
 	return size <= 0 || source.Size == size
+}
+
+// Converter progress is mapped onto the 10-75% band between "rendering pages"
+// and "rendering complete"; page rendering takes most of it.
+const (
+	renderProgressStart = 10
+	renderProgressEnd   = 70
+	textProgress        = 72
+)
+
+// conversionProgress publishes converter progress to the job heartbeat and
+// the revision. The revision is written only when the percentage changes so a
+// long document costs at most one write per percent.
+func (w *Worker) conversionProgress(ctx context.Context, revisionID string, progress *progressState) converter.ProgressFunc {
+	lastPersisted := renderProgressStart
+	return func(report converter.Progress) {
+		value, message := renderProgressStart, ""
+		switch report.Stage {
+		case converter.ProgressConvertDocument:
+			message = "converting document to PDF"
+		case converter.ProgressRenderPages:
+			if report.Total > 0 {
+				value += (renderProgressEnd - renderProgressStart) * report.Done / report.Total
+			}
+			message = fmt.Sprintf("rendered %d of %d pages", report.Done, report.Total)
+		case converter.ProgressExtractText:
+			value, message = textProgress, "extracting text and links"
+		default:
+			return
+		}
+		if value == lastPersisted {
+			progress.Set(value, message)
+			return
+		}
+		lastPersisted = value
+		w.setRevisionProgress(ctx, revisionID, progress, value, message)
+	}
 }
 
 func (w *Worker) setRevisionProgress(ctx context.Context, revisionID string, progress *progressState, value int, message string) {

@@ -108,11 +108,14 @@ func (c *Converter) convertStaged(ctx context.Context, srcPath, stagingDir, page
 	if pagesBase == "" || thumbsBase == "" || pagesBase == thumbsBase || filepath.Base(pagesBase) != pagesBase || filepath.Base(thumbsBase) != thumbsBase || reserved[pagesBase] || reserved[thumbsBase] || strings.HasPrefix(pagesBase, "original.") || strings.HasPrefix(thumbsBase, "original.") {
 		return nil, newConversionError(ErrInvalidStaging, "output layout", errors.New("pages and thumbnails must have different non-reserved directory names"))
 	}
-	if c.options.Timeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, c.options.Timeout)
-		defer cancel()
-	}
+	limit := newTimeLimit(ctx, c.options.Timeout)
+	defer limit.stop()
+	result, err := c.convertDocument(limit, srcPath, stagingDir, pagesBase, thumbsBase)
+	return result, limit.classify(err)
+}
+
+func (c *Converter) convertDocument(limit *timeLimit, srcPath, stagingDir, pagesBase, thumbsBase string) (*Result, error) {
+	ctx := limit.ctx
 	if err := ValidateSourceFormat(srcPath); err != nil {
 		return nil, err
 	}
@@ -153,6 +156,7 @@ func (c *Converter) convertStaged(ctx context.Context, srcPath, stagingDir, page
 		}
 	} else {
 		var documentWarnings []Warning
+		ReportProgress(ctx, Progress{Stage: ProgressConvertDocument})
 		pdfPath, documentWarnings, err = c.documentToPDF(ctx, srcPath, stagingDir)
 		warnings = append(warnings, documentWarnings...)
 		if err != nil {
@@ -175,6 +179,7 @@ func (c *Converter) convertStaged(ctx context.Context, srcPath, stagingDir, page
 	if c.options.MaxPages > 0 && documentInfo.pageCount > c.options.MaxPages {
 		return nil, newConversionError(ErrQuotaExceeded, "page limit", fmt.Errorf("document has %d pages, limit is %d", documentInfo.pageCount, c.options.MaxPages))
 	}
+	ctx = limit.extendForPages(documentInfo.pageCount, c.options.PageTimeout)
 	renderDPI, dpiWarning, err := c.fitRenderDPI(documentInfo.pages)
 	if err != nil {
 		return nil, err
@@ -183,80 +188,29 @@ func (c *Converter) convertStaged(ctx context.Context, srcPath, stagingDir, page
 		warnings = append(warnings, *dpiWarning)
 	}
 
-	pagesDir := filepath.Join(stagingDir, pagesBase)
-	thumbsDir := filepath.Join(stagingDir, thumbsBase)
-	renditionsDir := filepath.Join(stagingDir, "renditions")
-	renderWarnings, err := c.renderPDFPages(ctx, pdfPath, pagesDir, renderDPI, documentInfo.pageCount, budget)
+	absPDF, err := filepath.Abs(pdfPath)
+	if err != nil {
+		return nil, err
+	}
+	pages, renderWarnings, err := c.renderPages(ctx, pageRenderJob{
+		pdfPath:    absPDF,
+		stagingDir: stagingDir,
+		pagesBase:  pagesBase,
+		thumbsBase: thumbsBase,
+		dpi:        renderDPI,
+		geometry:   documentInfo.pages[:documentInfo.pageCount],
+		budget:     budget,
+	})
 	warnings = append(warnings, renderWarnings...)
 	if err != nil {
 		return nil, err
 	}
-	renderWarnings, err = c.renderPDFPages(ctx, pdfPath, thumbsDir, c.options.ThumbnailDPI, documentInfo.pageCount, budget)
-	warnings = append(warnings, renderWarnings...)
-	if err != nil {
-		return nil, err
+	pageImages := make([]string, len(pages))
+	for i := range pages {
+		pageImages[i] = filepath.Join(stagingDir, pagesBase, fmt.Sprintf("page-%d.png", pages[i].Number))
 	}
 
-	pages := make([]PageManifest, documentInfo.pageCount)
-	pageImages := make([]string, documentInfo.pageCount)
-	for i := 0; i < documentInfo.pageCount; i++ {
-		pageNumber := i + 1
-		pageName := fmt.Sprintf("page-%d.png", pageNumber)
-		pagePath := filepath.Join(pagesDir, pageName)
-		thumbPath := filepath.Join(thumbsDir, pageName)
-		pageJPEG := filepath.Join(renditionsDir, fmt.Sprintf("page-%d.jpg", pageNumber))
-		thumbJPEG := filepath.Join(renditionsDir, fmt.Sprintf("thumb-%d.jpg", pageNumber))
-		if err := writeJPEG(pagePath, pageJPEG, c.options.JPEGQuality); err != nil {
-			return nil, pageConversionError(err, "JPEG page rendition", pageNumber, nil)
-		}
-		if err := budget.add(pageJPEG); err != nil {
-			return nil, pageConversionError(nil, "disk limit", pageNumber, err)
-		}
-		if err := writeJPEG(thumbPath, thumbJPEG, c.options.JPEGQuality); err != nil {
-			return nil, pageConversionError(err, "JPEG thumbnail rendition", pageNumber, nil)
-		}
-		if err := budget.add(thumbJPEG); err != nil {
-			return nil, pageConversionError(nil, "disk limit", pageNumber, err)
-		}
-
-		width, height, err := imageDimensions(pagePath)
-		if err != nil {
-			return nil, pageConversionError(ErrArtifactValidation, "page geometry", pageNumber, err)
-		}
-		actualPixels := int64(width) * int64(height)
-		if c.options.MaxPixelsPerPage > 0 && actualPixels > c.options.MaxPixelsPerPage {
-			return nil, pageConversionError(ErrQuotaExceeded, "rendered pixel limit", pageNumber, fmt.Errorf("got %d pixels, limit is %d", actualPixels, c.options.MaxPixelsPerPage))
-		}
-		pagePNG, err := makeRendition(stagingDir, "page", "png", filepath.Join(pagesBase, pageName), 0)
-		if err != nil {
-			return nil, pageConversionError(err, "page rendition", pageNumber, nil)
-		}
-		pageJPG, err := makeRendition(stagingDir, "page", "jpeg", filepath.Join("renditions", fmt.Sprintf("page-%d.jpg", pageNumber)), c.options.JPEGQuality)
-		if err != nil {
-			return nil, pageConversionError(err, "page rendition", pageNumber, nil)
-		}
-		thumbPNG, err := makeRendition(stagingDir, "thumbnail", "png", filepath.Join(thumbsBase, pageName), 0)
-		if err != nil {
-			return nil, pageConversionError(err, "thumbnail rendition", pageNumber, nil)
-		}
-		thumbJPG, err := makeRendition(stagingDir, "thumbnail", "jpeg", filepath.Join("renditions", fmt.Sprintf("thumb-%d.jpg", pageNumber)), c.options.JPEGQuality)
-		if err != nil {
-			return nil, pageConversionError(err, "thumbnail rendition", pageNumber, nil)
-		}
-		widthPoints, heightPoints := documentInfo.pages[i].displayPoints()
-		pages[i] = PageManifest{
-			Number:       pageNumber,
-			Width:        width,
-			Height:       height,
-			WidthPoints:  widthPoints,
-			HeightPoints: heightPoints,
-			Rotation:     documentInfo.pages[i].rotation,
-			TextSource:   "none",
-			Images:       []Rendition{pagePNG, pageJPG, thumbPNG, thumbJPG},
-		}
-		pageImages[i] = pagePath
-	}
-
+	ReportProgress(ctx, Progress{Stage: ProgressExtractText})
 	texts, positionedText, textWarnings := c.extractTextArtifacts(ctx, pdfPath, documentInfo.pageCount)
 	warnings = append(warnings, textWarnings...)
 	texts, ocrUsed, ocrWarnings, err := c.applyOCR(ctx, texts, pageImages)

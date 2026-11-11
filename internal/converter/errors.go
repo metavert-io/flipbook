@@ -14,6 +14,7 @@ var (
 	ErrArtifactValidation = errors.New("conversion artifact validation failed")
 	ErrInvalidOptions     = errors.New("invalid converter options")
 	ErrInvalidStaging     = errors.New("invalid staging directory")
+	ErrTimeout            = errors.New("time limit exceeded")
 )
 
 // ConversionError adds a stable category and optional page number to an error.

@@ -59,7 +59,9 @@ conversion:
   max_job_attempts: 5            # FLIPBOOK_CONVERSION_MAX_JOB_ATTEMPTS
   retry_backoff_seconds: 30      # FLIPBOOK_CONVERSION_RETRY_BACKOFF_SECONDS
   max_retry_backoff_seconds: 3600 # FLIPBOOK_CONVERSION_MAX_RETRY_BACKOFF_SECONDS
-  timeout_seconds: 900           # FLIPBOOK_CONVERSION_TIMEOUT_SECONDS
+  timeout_seconds: 900           # FLIPBOOK_CONVERSION_TIMEOUT_SECONDS; base time limit per conversion.
+  page_timeout_seconds: 30       # FLIPBOOK_CONVERSION_PAGE_TIMEOUT_SECONDS; added per page (60 pages: 900 + 60*30 s). Negative disables.
+  render_concurrency: 0          # FLIPBOOK_CONVERSION_RENDER_CONCURRENCY; pages rendered at once, 0 = CPUs available (max 4).
   max_pages: 1000                # FLIPBOOK_CONVERSION_MAX_PAGES
   max_page_pixels: 50000000      # FLIPBOOK_CONVERSION_MAX_PAGE_PIXELS
   max_total_pixels: 2000000000   # FLIPBOOK_CONVERSION_MAX_TOTAL_PIXELS; longer documents render at a lower DPI.
