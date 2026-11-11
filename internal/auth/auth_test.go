@@ -255,7 +255,7 @@ func TestCSRFFormsOriginChecksAndBearerExemption(t *testing.T) {
 	badToken := formRequest(a, http.MethodPost, "/login", values, "")
 	recorder = httptest.NewRecorder()
 	badToken.Header.Set(CSRFHeaderName, "bad")
-	if err := a.validateCSRF(badToken); !errors.Is(err, ErrInvalidCSRF) {
+	if err := a.validateCSRF(recorder, badToken); !errors.Is(err, ErrInvalidCSRF) {
 		t.Fatalf("invalid CSRF token was accepted: %v", err)
 	}
 

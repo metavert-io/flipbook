@@ -31,6 +31,12 @@ The `lastsaas` program's `environment=` overrode the Fly container env, so all L
 **F4 — `internal/saas` has zero tests.**
 JWT validation (`jwt.go`) and tenant membership middleware (`middleware.go`) are the entire authorization backbone of SaaS mode, and nothing exercises them. The jwt library guards `alg` confusion correctly and expiry is enforced, but an unsigned-expiry token (`ExpiresAt == nil`) is accepted, and membership grants full access with no role distinction (any tenant member can delete flipbooks — see F6). Add table-driven tests: expired token, wrong secret, `alg=none`, missing `X-Tenant-ID`, non-member, deactivated tenant.
 
+**F17 — ✅ FIXED 2026-11-11: `/admin/*` mutations never validated CSRF.**
+The main admin route group ran only `RequireAuth`, so upload, import, bulk, delete, role changes, API keys, publish and share-token routes accepted any same-site POST (the `SameSite=Lax` session cookie does not stop a sibling subdomain of the live host). `mountAdminRoutes` in `main.go` now runs `CSRFMiddleware` (origin + token) on every admin route, and `admin_routes_test.go` walks the router to prove each mutation returns 403 without a token.
+
+**F18 — ✅ FIXED 2026-11-11: anonymous disk fill through the CSRF check.**
+`requestCSRFToken` ran `ParseMultipartForm` on unbounded bodies before authentication; a 185 MB multipart POST to `/login` was read in full. The check now prefers the `X-CSRF-Token` header (the upload queue sends it), parses url-encoded bodies under a 2 MB cap, and scans only the first 64 KB of a multipart body in memory, replaying it so upload handlers keep their own `MaxBytesReader`. The pre-authentication forms (`/login`, `/logout`, `/invitation`, `/password-reset*`, `/account/password`) cap the whole body at 64 KB and answer 413 beyond it. Tokens in the URL query are no longer accepted.
+
 ### Should fix soon after launch
 
 **F5 — ✅ FIXED 2026-11-09: graceful shutdown now has a 30s deadline.**

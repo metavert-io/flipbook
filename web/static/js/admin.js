@@ -452,7 +452,10 @@ document.documentElement.classList.add('js');
     function submitUploadForm(form, data, row, label) {
         return new Promise(function (resolve, reject) {
             var xhr = new XMLHttpRequest();
+            var csrf = csrfTokenFor(form);
             xhr.open('POST', form.action);
+            // The header lets the server check CSRF without reading the request body.
+            if (csrf) xhr.setRequestHeader('X-CSRF-Token', csrf);
             xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
             xhr.setRequestHeader('Accept', 'application/json');
             xhr.timeout = 10 * 60 * 1000;
@@ -506,7 +509,7 @@ document.documentElement.classList.add('js');
                 data.append('upload_id', uploadID);
                 return fetch(form.action, {
                     method: 'POST', body: data, credentials: 'same-origin',
-                    headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' }
+                    headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest', 'X-CSRF-Token': csrfTokenFor(form) }
                 }).then(function (response) {
                     return response.json().catch(function () { return null; }).then(function (body) {
                         if (!response.ok || !body || !body.id) {
