@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Upload, FileText, CheckCircle, AlertCircle, Loader2 } from 'lucide-react';
 import { flipbookApi, type UsageInfo } from '../../api/flipbook';
@@ -6,9 +6,15 @@ import LoadingSpinner from '../../components/LoadingSpinner';
 
 type Phase = 'idle' | 'uploading' | 'converting' | 'ready' | 'error';
 
+const hasFiles = (e: { dataTransfer: DataTransfer | null }) =>
+  Array.from(e.dataTransfer?.types ?? []).includes('Files');
+
 export default function FlipbookUpload() {
   const navigate = useNavigate();
   const fileRef = useRef<HTMLInputElement>(null);
+  const dropZoneRef = useRef<HTMLDivElement>(null);
+  const dragDepth = useRef(0);
+  const [dragging, setDragging] = useState(false);
   const [usage, setUsage] = useState<UsageInfo | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [title, setTitle] = useState('');
@@ -26,10 +32,25 @@ export default function FlipbookUpload() {
     }).catch(() => {});
   }, [navigate]);
 
-  const onDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    const f = e.dataTransfer.files[0];
-    if (f) pickFile(f);
+  // A file released anywhere but the drop zone (including the zone while it is
+  // disabled at the plan limit, or the page mid-upload) would otherwise make
+  // the browser open the file and abandon this page.
+  useEffect(() => {
+    const guard = (e: DragEvent) => {
+      if (!hasFiles(e) || dropZoneRef.current?.contains(e.target as Node)) return;
+      e.preventDefault();
+      if (e.type === 'dragover' && e.dataTransfer) e.dataTransfer.dropEffect = 'none';
+      if (e.type === 'drop') {
+        dragDepth.current = 0;
+        setDragging(false);
+      }
+    };
+    window.addEventListener('dragover', guard);
+    window.addEventListener('drop', guard);
+    return () => {
+      window.removeEventListener('dragover', guard);
+      window.removeEventListener('drop', guard);
+    };
   }, []);
 
   const pickFile = (f: File) => {
@@ -40,9 +61,41 @@ export default function FlipbookUpload() {
     }
     setFile(f);
     setError('');
-    if (!title) {
-      setTitle(f.name.replace(/\.[^/.]+$/, ''));
+    setTitle((current) => current || f.name.replace(/\.[^/.]+$/, ''));
+  };
+
+  // Entering a child element fires dragleave on the parent, so count depth
+  // rather than toggling on every enter/leave.
+  const onDragEnter = (e: React.DragEvent) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    dragDepth.current += 1;
+    setDragging(true);
+  };
+
+  const onDragOver = (e: React.DragEvent) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+  };
+
+  const onDragLeave = (e: React.DragEvent) => {
+    if (!hasFiles(e)) return;
+    dragDepth.current = Math.max(0, dragDepth.current - 1);
+    if (dragDepth.current === 0) setDragging(false);
+  };
+
+  const onDrop = (e: React.DragEvent) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    dragDepth.current = 0;
+    setDragging(false);
+    const files = e.dataTransfer.files;
+    if (files.length > 1) {
+      setError('Drop one file at a time. Each upload creates one flipbook.');
+      return;
     }
+    if (files[0]) pickFile(files[0]);
   };
 
   const handleUpload = async () => {
@@ -114,12 +167,17 @@ export default function FlipbookUpload() {
         <>
           {/* Drop zone */}
           <div
+            ref={dropZoneRef}
             className={`border-2 border-dashed rounded-2xl p-12 text-center transition-colors cursor-pointer ${
-              file ? 'border-primary-500 bg-primary-500/5' : 'border-dark-700 hover:border-dark-600'
+              dragging
+                ? 'border-primary-400 bg-primary-500/10'
+                : file ? 'border-primary-500 bg-primary-500/5' : 'border-dark-700 hover:border-dark-600'
             } ${atLimit ? 'opacity-50 pointer-events-none' : ''}`}
             onClick={() => fileRef.current?.click()}
+            onDragEnter={onDragEnter}
+            onDragOver={onDragOver}
+            onDragLeave={onDragLeave}
             onDrop={onDrop}
-            onDragOver={(e) => e.preventDefault()}
           >
             <input
               ref={fileRef}

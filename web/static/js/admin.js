@@ -599,6 +599,117 @@ document.documentElement.classList.add('js');
         return check();
     }
 
+    function draggingFiles(event) {
+        var types = event.dataTransfer && event.dataTransfer.types;
+        return !!types && Array.prototype.indexOf.call(types, 'Files') !== -1;
+    }
+
+    // The file input inside the dropzone is a 1px invisible element, so a drop
+    // almost always lands on the label around it. The browser does not hand
+    // those files to the input; without handling the drop here it opens the
+    // dropped document in the tab instead and the upload page is lost.
+    function initDropzone(input, dropzone, info, list) {
+        var extensions = (input.getAttribute('accept') || '').split(',').map(function (value) {
+            return value.trim().toLowerCase();
+        }).filter(function (value) { return value.charAt(0) === '.'; });
+        var depth = 0;
+
+        function supported(file) {
+            var name = file.name.toLowerCase();
+            return !extensions.length || extensions.some(function (extension) {
+                return name.length > extension.length && name.slice(-extension.length) === extension;
+            });
+        }
+
+        function render() {
+            list.textContent = '';
+            Array.prototype.slice.call(input.files).forEach(function (file) {
+                var item = document.createElement('li');
+                item.textContent = file.name + ' · ' + formatSize(file.size);
+                list.appendChild(item);
+            });
+            info.classList.toggle('hidden', !input.files.length);
+        }
+
+        function assign(files) {
+            try {
+                var transfer = new DataTransfer();
+                files.forEach(function (file) { transfer.items.add(file); });
+                input.files = transfer.files;
+                return true;
+            } catch (error) {
+                return false;
+            }
+        }
+
+        // Applies the same rules to dropped and picked files. A drop with no
+        // usable file keeps the current selection; a picker choice already
+        // replaced it, so the input is cleared rather than left with files the
+        // server will refuse.
+        function select(fileList, fromPicker) {
+            clearClientMessages();
+            var files = Array.prototype.slice.call(fileList || []);
+            var usable = files.filter(supported);
+            var rejected = files.filter(function (file) { return !supported(file); });
+            if (!input.multiple) usable = usable.slice(0, 1);
+            var applied = usable.length || fromPicker ? assign(usable) : true;
+            if (!applied && !fromPicker) {
+                showClientError('This browser cannot take dropped files here. Click the box to choose files instead.');
+                return;
+            }
+            render();
+            if (rejected.length && applied) {
+                showClientError('Skipped ' + rejected.length + ' unsupported file(s): ' + rejected.map(function (file) { return file.name; }).join(', ') + '. Supported formats: ' + extensions.join(', ') + '.');
+            }
+        }
+
+        function reset() {
+            depth = 0;
+            dropzone.classList.remove('dragover');
+        }
+
+        input.addEventListener('change', function () { select(input.files, true); });
+
+        // Child elements fire their own enter/leave events while the pointer
+        // crosses them, so a depth counter keeps the highlight from flickering.
+        dropzone.addEventListener('dragenter', function (event) {
+            if (!draggingFiles(event)) return;
+            event.preventDefault();
+            depth += 1;
+            dropzone.classList.add('dragover');
+        });
+        dropzone.addEventListener('dragover', function (event) {
+            if (!draggingFiles(event)) return;
+            event.preventDefault();
+            event.dataTransfer.dropEffect = 'copy';
+        });
+        dropzone.addEventListener('dragleave', function (event) {
+            if (!draggingFiles(event)) return;
+            depth = Math.max(0, depth - 1);
+            if (!depth) dropzone.classList.remove('dragover');
+        });
+        dropzone.addEventListener('drop', function (event) {
+            if (!draggingFiles(event)) return;
+            event.preventDefault();
+            reset();
+            select(event.dataTransfer.files, false);
+        });
+
+        // A file released just outside the box would otherwise navigate away
+        // from the page and discard the form.
+        window.addEventListener('dragover', function (event) {
+            if (!draggingFiles(event) || dropzone.contains(event.target)) return;
+            event.preventDefault();
+            event.dataTransfer.dropEffect = 'none';
+        });
+        window.addEventListener('drop', function (event) {
+            if (!draggingFiles(event) || dropzone.contains(event.target)) return;
+            event.preventDefault();
+            reset();
+        });
+        window.addEventListener('dragend', reset);
+    }
+
     function initUploadQueue() {
         var form = document.querySelector('[data-upload-form]');
         var importForm = document.querySelector('[data-import-form]');
@@ -606,27 +717,7 @@ document.documentElement.classList.add('js');
         var input = byId('file');
         var info = byId('file-info');
         var list = byId('file-list');
-        if (input) {
-            input.addEventListener('change', function () {
-                list.textContent = '';
-                Array.prototype.slice.call(input.files).forEach(function (file) {
-                    var item = document.createElement('li');
-                    item.textContent = file.name + ' · ' + formatSize(file.size);
-                    list.appendChild(item);
-                });
-                info.classList.toggle('hidden', !input.files.length);
-            });
-            var dropzone = byId('dropzone');
-            ['dragenter', 'dragover'].forEach(function (name) {
-                dropzone.addEventListener(name, function (event) {
-                    event.preventDefault();
-                    dropzone.classList.add('dragover');
-                });
-            });
-            ['dragleave', 'drop'].forEach(function (name) {
-                dropzone.addEventListener(name, function () { dropzone.classList.remove('dragover'); });
-            });
-        }
+        if (input) initDropzone(input, byId('dropzone'), info, list);
 
         function begin(files, sourceForm, isImport) {
             clearClientMessages();
