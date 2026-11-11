@@ -2,8 +2,10 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -17,6 +19,7 @@ import (
 	"github.com/metavert-io/flipbook/internal/database"
 	"github.com/metavert-io/flipbook/internal/models"
 	"github.com/metavert-io/flipbook/internal/publishing"
+	"github.com/metavert-io/flipbook/internal/storage"
 	"github.com/metavert-io/flipbook/internal/worker"
 )
 
@@ -32,13 +35,33 @@ func (h *AdminHandler) Replace(w http.ResponseWriter, r *http.Request) {
 		h.lifecycleError(w, r, actor, id, adminInputf("The replacement upload is invalid or too large."))
 		return
 	}
-	file, header, err := r.FormFile("file")
-	if err != nil {
-		h.lifecycleError(w, r, actor, id, adminInputf("Choose a replacement document."))
-		return
+	var file io.ReadCloser
+	var sourceName string
+	if uploadID := strings.TrimSpace(r.FormValue("upload_id")); uploadID != "" {
+		session, sessionFile, err := h.completedUploadSession(actor, uploadID)
+		if err != nil {
+			if errors.Is(err, storage.ErrUploadSessionNotFound) || errors.Is(err, storage.ErrUploadIncomplete) {
+				err = adminInputf("The replacement upload is incomplete or has expired. Upload the document again.")
+			}
+			h.lifecycleError(w, r, actor, id, err)
+			return
+		}
+		defer func() {
+			if err := h.storage.DeleteUploadSession(uploadID); err != nil {
+				log.Printf("upload sessions: delete %s: %v", uploadID, err)
+			}
+		}()
+		file, sourceName = sessionFile, session.Filename
+	} else {
+		formFile, header, err := r.FormFile("file")
+		if err != nil {
+			h.lifecycleError(w, r, actor, id, adminInputf("Choose a replacement document."))
+			return
+		}
+		file, sourceName = formFile, header.Filename
 	}
 	defer file.Close()
-	filename, err := safeAdminFilename(header.Filename)
+	filename, err := safeAdminFilename(sourceName)
 	if err != nil {
 		h.lifecycleError(w, r, actor, id, err)
 		return

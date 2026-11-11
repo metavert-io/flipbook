@@ -143,6 +143,7 @@ func TestAdminMutationsRejectRequestsWithoutCSRFToken(t *testing.T) {
 		"POST /admin/flipbooks/{id}/delete", "POST /admin/flipbooks/{id}/replace", "POST /admin/flipbooks/{id}/publish",
 		"POST /admin/flipbooks/{id}/share-tokens", "POST /admin/team/members/{userID}/role",
 		"POST /admin/security/api-keys", "POST /admin/settings/admins",
+		"POST /admin/uploads", "PUT /admin/uploads/{uploadID}", "DELETE /admin/uploads/{uploadID}",
 	} {
 		if !checked[route] {
 			t.Errorf("%s is not mounted by mountAdminRoutes", route)

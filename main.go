@@ -512,17 +512,21 @@ func setupAdminMode(r chi.Router, cfg *config.Config, db *database.DB, store *st
 	log.Printf("API key:   %s", apiKeyStatus(cfg))
 }
 
-// mountAdminRoutes mounts the session-authenticated admin UI and its settings
-// mutations. Every route passes the CSRF check: the session cookie is
-// SameSite=Lax, which does not stop another app on a sibling subdomain from
-// posting forms here. Uploads send the token as X-CSRF-Token so their bodies
-// are left for the handler's own size limit.
+// mountAdminRoutes mounts the session-authenticated admin UI, its settings
+// mutations, and the resumable chunked-upload sessions. Every route passes the
+// CSRF check: the session cookie is SameSite=Lax, which does not stop another
+// app on a sibling subdomain from posting forms here. Upload requests send the
+// token as X-CSRF-Token so their bodies are left for the handler's own size
+// limit.
 func mountAdminRoutes(r chi.Router, a *auth.Auth, adminH *handlers.AdminHandler) {
 	r.Group(func(r chi.Router) {
 		r.Use(a.RequireAuth)
 		r.Use(a.CSRFMiddleware)
 		adminH.RegisterRoutes(r)
 		adminH.RegisterSettingsRoutes(r)
+		// Large documents arrive in short chunk requests so none outlives the
+		// edge proxy's request read timeout.
+		adminH.RegisterUploadSessionRoutes(r)
 	})
 }
 

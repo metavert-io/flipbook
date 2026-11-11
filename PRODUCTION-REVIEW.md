@@ -31,10 +31,10 @@ The `lastsaas` program's `environment=` overrode the Fly container env, so all L
 **F4 — `internal/saas` has zero tests.**
 JWT validation (`jwt.go`) and tenant membership middleware (`middleware.go`) are the entire authorization backbone of SaaS mode, and nothing exercises them. The jwt library guards `alg` confusion correctly and expiry is enforced, but an unsigned-expiry token (`ExpiresAt == nil`) is accepted, and membership grants full access with no role distinction (any tenant member can delete flipbooks — see F6). Add table-driven tests: expired token, wrong secret, `alg=none`, missing `X-Tenant-ID`, non-member, deactivated tenant.
 
-**F16 — ✅ FIXED 2026-11-11: `/admin/*` mutations never validated CSRF.**
+**F17 — ✅ FIXED 2026-11-11: `/admin/*` mutations never validated CSRF.**
 The main admin route group ran only `RequireAuth`, so upload, import, bulk, delete, role changes, API keys, publish and share-token routes accepted any same-site POST (the `SameSite=Lax` session cookie does not stop a sibling subdomain of the live host). `mountAdminRoutes` in `main.go` now runs `CSRFMiddleware` (origin + token) on every admin route, and `admin_routes_test.go` walks the router to prove each mutation returns 403 without a token.
 
-**F17 — ✅ FIXED 2026-11-11: anonymous disk fill through the CSRF check.**
+**F18 — ✅ FIXED 2026-11-11: anonymous disk fill through the CSRF check.**
 `requestCSRFToken` ran `ParseMultipartForm` on unbounded bodies before authentication; a 185 MB multipart POST to `/login` was read in full. The check now prefers the `X-CSRF-Token` header (the upload queue sends it), parses url-encoded bodies under a 2 MB cap, and scans only the first 64 KB of a multipart body in memory, replaying it so upload handlers keep their own `MaxBytesReader`. The pre-authentication forms (`/login`, `/logout`, `/invitation`, `/password-reset*`, `/account/password`) cap the whole body at 64 KB and answer 413 beyond it. Tokens in the URL query are no longer accepted.
 
 ### Should fix soon after launch
@@ -72,6 +72,9 @@ Deliberate ("upload progress tracking"), and `FlipbookStatus`'s legacy fallback 
 **F14 — SPA `index.html` re-read per request** (`main.go:662`). Cache the file (or bytes) at startup; re-read only on failure. Minor perf on every page load.
 
 **F15 — Repo hygiene leftovers:** `bin/flipbook.exe~` backup binary; `data/tmp/` inside the repo holds the Go toolchain/build cache (gitignored, works, but fragile — document it or move it); module path `github.com/metavert-io/flipbook` and Fly app name `flipbook-metavert` still carry the old identity (already tracked in MEMORY.md — fine to defer).
+
+**F16 — ✅ FIXED 2026-11-11: large admin uploads were cut off by the edge proxy.**
+The live host's edge proxy (Traefik v3 behind Coolify) aborts any request whose body takes longer than 60 seconds to arrive (`entryPoints.*.transport.respondingTimeouts.readTimeout` defaults to `60s`); verified against production with a throttled upload that returned `502` at 60.8 s. The admin UI sent each document as one multipart request, so a 177 MB catalogue needed ~24 Mbit/s of upstream bandwidth to finish in time, and the client then waited up to 30 minutes with no feedback. The admin upload queue and the "Replace source document" form now send documents as resumable chunks through `/admin/uploads` (session + CSRF header): chunks are sized from measured throughput to take ~8 s, a chunk with no progress for 30 s is aborted and retried, and retries resume from the offset the server confirms. Sessions live under `<data>/flipbooks/.upload-sessions/`, expire after 24 h, and are capped at 10 per user. The no-JavaScript form post and the `/api/flipbooks` API upload still use a single request and remain subject to the proxy limit — raise the proxy read timeout too (e.g. `--entrypoints.https.transport.respondingTimeouts.readTimeout=30m` in the Coolify proxy configuration).
 
 ---
 

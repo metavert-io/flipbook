@@ -188,6 +188,8 @@ func (h *SaaSAPIHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		Status:   models.StatusPending,
 		TenantID: tenantID,
 	}
+	// Tenant uploads have no workspace to inherit from.
+	models.FallbackFlipbookDefaults().Apply(fb)
 	if err := h.db.CreateFlipbook(fb); err != nil {
 		log.Printf("Failed to create flipbook: %v", err)
 		jsonError(w, "Failed to create flipbook", 500)

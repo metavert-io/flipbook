@@ -83,6 +83,13 @@ type EmbedSettings struct {
 	Background     string   `bson:"background,omitempty" json:"background,omitempty"`
 }
 
+// DefaultEmbedSettings is what new workspaces and flipbooks start with.
+// Embedding is on so a copied embed code works for anonymous readers on other
+// sites; an empty AllowedDomains lets any site frame the publication.
+func DefaultEmbedSettings() EmbedSettings {
+	return EmbedSettings{Enabled: true, StartPage: 1, ShowToolbar: true, ShowSearch: true}
+}
+
 type ShareSettings struct {
 	Enabled  bool `bson:"enabled" json:"enabled"`
 	Native   bool `bson:"native" json:"native"`

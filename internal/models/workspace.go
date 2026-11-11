@@ -1,6 +1,7 @@
 package models
 
 import (
+	"slices"
 	"strings"
 	"time"
 )
@@ -126,6 +127,54 @@ func (w *Workspace) ApplyDefaults() {
 	if w.Settings.AnalyticsRetentionDays == 0 {
 		w.Settings.AnalyticsRetentionDays = 365
 	}
+}
+
+// FlipbookDefaults are the per-publication settings a new flipbook inherits
+// from its workspace. Every creation path (admin upload, API, provider export)
+// applies the same set so a publication behaves the same however it arrived.
+type FlipbookDefaults struct {
+	Visibility Visibility
+	Download   DownloadSettings
+	Embed      EmbedSettings
+	Share      ShareSettings
+}
+
+// FallbackFlipbookDefaults is used when there is no workspace to inherit from
+// (legacy SaaS tenant uploads): public, embeddable, no downloads or share bar.
+func FallbackFlipbookDefaults() FlipbookDefaults {
+	return FlipbookDefaults{Visibility: VisibilityPublic, Embed: DefaultEmbedSettings()}
+}
+
+// NewFlipbookDefaults returns the settings a flipbook created in this
+// workspace starts with. A nil workspace yields FallbackFlipbookDefaults.
+func (w *Workspace) NewFlipbookDefaults() FlipbookDefaults {
+	if w == nil {
+		return FallbackFlipbookDefaults()
+	}
+	defaults := FlipbookDefaults{
+		Visibility: w.Settings.DefaultVisibility,
+		Download:   w.Settings.DefaultDownload,
+		Embed:      w.Settings.DefaultEmbed,
+		Share:      w.Settings.DefaultShare,
+	}
+	if defaults.Visibility == "" {
+		defaults.Visibility = VisibilityPublic
+	}
+	return defaults
+}
+
+// Apply copies the defaults onto a flipbook being created. Download, embed and
+// share are always set; visibility only when the caller has not chosen one.
+func (d FlipbookDefaults) Apply(fb *Flipbook) {
+	if fb.Visibility == "" {
+		fb.Visibility = d.Visibility
+	}
+	fb.Download = d.Download
+	fb.Embed = d.Embed
+	// Clone so editing one flipbook's allowlist can't write through to the
+	// workspace or to other flipbooks created from the same defaults.
+	fb.Embed.AllowedDomains = slices.Clone(d.Embed.AllowedDomains)
+	fb.Share = d.Share
 }
 
 type Membership struct {

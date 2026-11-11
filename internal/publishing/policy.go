@@ -25,7 +25,7 @@ func EvaluateAccess(input PolicyInput) Decision {
 		FullAccess: true, PreviewPages: pageCount,
 	}
 	if input.Resource == ResourceEmbed || input.ViaEmbed {
-		decision.FrameAncestors = frameAncestors(fb.Embed.AllowedDomains)
+		decision.FrameAncestors = FrameAncestors(fb.Embed.AllowedDomains)
 	}
 	decision.NoIndex = fb.SEO.NoIndex || fb.Visibility != models.VisibilityPublic ||
 		input.Resource == ResourceEmbed || input.Resource == ResourceStatus || input.ViaEmbed
@@ -280,7 +280,9 @@ func cachePolicy(input PolicyInput, decision Decision, member, staff, live bool)
 	return CachePrivate
 }
 
-func frameAncestors(domains []string) string {
+// FrameAncestors returns the CSP frame-ancestors source list for an embed
+// allowlist: "*" when the list is empty, otherwise 'self' plus each entry.
+func FrameAncestors(domains []string) string {
 	if len(domains) == 0 {
 		return "*"
 	}
@@ -292,11 +294,27 @@ func frameAncestors(domains []string) string {
 		}
 		if strings.Contains(domain, "://") {
 			values = append(values, domain)
-		} else {
-			values = append(values, "https://"+domain)
+			continue
+		}
+		values = append(values, "https://"+domain)
+		if www := wwwVariant(domain); www != "" {
+			values = append(values, "https://"+www)
 		}
 	}
 	return strings.Join(values, " ")
+}
+
+// wwwVariant returns "www."+domain for a bare apex entry such as "penninn.is",
+// because people list their site that way while it is served from
+// www.penninn.is. Only name.tld entries count as apex (multi-label suffixes
+// like .co.uk need www listed explicitly); subdomains, wildcards and explicit
+// origins with a scheme are taken literally.
+func wwwVariant(domain string) string {
+	if strings.HasPrefix(domain, "www.") || strings.HasPrefix(domain, "*.") ||
+		strings.ContainsAny(domain, ":/") || strings.Count(domain, ".") != 1 {
+		return ""
+	}
+	return "www." + domain
 }
 
 func embedHostAllowed(rawHost string, domains []string) bool {
@@ -309,6 +327,7 @@ func embedHostAllowed(rawHost string, domains []string) bool {
 	}
 	for _, allowed := range domains {
 		allowed = strings.ToLower(strings.TrimSpace(allowed))
+		explicitOrigin := strings.Contains(allowed, "://")
 		allowed = strings.TrimPrefix(allowed, "https://")
 		allowed = strings.TrimPrefix(allowed, "http://")
 		allowed = strings.TrimSuffix(allowed, "/")
@@ -319,7 +338,12 @@ func embedHostAllowed(rawHost string, domains []string) bool {
 			}
 			continue
 		}
-		if allowedHost := normalizeEmbedHost(allowed); allowedHost != "" && host == allowedHost {
+		allowedHost := normalizeEmbedHost(allowed)
+		if allowedHost == "" {
+			continue
+		}
+		// Mirror FrameAncestors: only bare entries also cover www.
+		if host == allowedHost || (!explicitOrigin && host == wwwVariant(allowed)) {
 			return true
 		}
 	}

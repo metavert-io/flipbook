@@ -67,6 +67,7 @@
     <section class="panel" aria-labelledby="embed-config-heading">
         <h2 id="embed-config-heading">Embed code configurator</h2>
         <p class="field-help">Size and aspect options change only the generated iframe. Save reader behavior under Publication settings → Embed behavior below.</p>
+        {{if not .Flipbook.Embed.Enabled}}<p class="flash flash-warning" role="status">Public embedding is off for this publication. The preview below works only because you are signed in; on other sites this embed code shows "Embedding is disabled". Turn on <strong>Allow public embedding</strong> under Publication settings → Embed behavior.</p>{{end}}
         <form id="embed-configurator" data-embed-config data-base-url="{{.BaseURL}}" data-slug="{{.Flipbook.Slug}}" class="form-grid">
             <div class="form-group"><label for="embed-width">Width (pixels)</label><input type="number" id="embed-width" value="800" min="200" max="4000"></div>
             <div class="form-group"><label for="embed-height">Height (pixels)</label><input type="number" id="embed-height" value="600" min="200" max="4000"></div>
@@ -168,7 +169,7 @@
                     <label class="checkbox-label"><input type="checkbox" name="embed_share" {{if .Flipbook.Embed.ShowShare}}checked{{end}}> Show share</label>
                     <label class="checkbox-label"><input type="checkbox" name="embed_download" {{if .Flipbook.Embed.ShowDownload}}checked{{end}}> Show download</label>
                 </fieldset>
-                <div class="form-group form-span-2"><label for="embed-domains">Allowed frame-ancestor domains</label><textarea id="embed-domains" name="embed_domains" rows="3" placeholder="example.com, https://intranet.example.com">{{.AllowedDomainString}}</textarea><p class="field-help">Leave blank to allow any frame ancestor. Use a comma-separated allowlist to restrict embedding.</p></div>
+                <div class="form-group form-span-2"><label for="embed-domains">Allowed frame-ancestor domains</label><textarea id="embed-domains" name="embed_domains" rows="3" placeholder="example.com, https://intranet.example.com">{{.AllowedDomainString}}</textarea><p class="field-help">Leave blank to allow any frame ancestor. Use a comma-separated allowlist to restrict embedding. A bare domain such as example.com also covers www.example.com; use *.example.com for every subdomain.</p></div>
                 <div class="form-group"><label for="embed-start-page">Start page</label><input type="number" id="embed-start-page" name="embed_start_page" value="{{.Flipbook.Embed.StartPage}}" min="1" {{if .Flipbook.PageCount}}max="{{.Flipbook.PageCount}}"{{end}}></div>
                 <div class="form-group"><label for="embed-reading-mode">Reading mode</label><select id="embed-reading-mode" name="embed_reading_mode">{{$mode := .Flipbook.Embed.ReadingMode}}<option value="" {{if eq $mode ""}}selected{{end}}>Viewer default</option><option value="flip" {{if eq $mode "flip"}}selected{{end}}>Page flip</option><option value="single" {{if eq $mode "single"}}selected{{end}}>Single page</option><option value="double" {{if eq $mode "double"}}selected{{end}}>Two pages</option><option value="continuous" {{if eq $mode "continuous"}}selected{{end}}>Continuous scroll</option><option value="html" {{if eq $mode "html"}}selected{{end}}>Accessible HTML text</option></select></div>
                 <div class="form-group"><label for="embed-background">Background color</label><input type="text" id="embed-background" name="embed_background" value="{{.Flipbook.Embed.Background}}" placeholder="#F8FAFC" pattern="^$|#[0-9A-Fa-f]{3}([0-9A-Fa-f]{3})?"></div>
@@ -220,10 +221,11 @@
     <section class="panel" aria-labelledby="replace-heading">
         <h2 id="replace-heading">Replace source document</h2>
         <p class="field-help">A replacement is converted as a new immutable revision. The current live revision stays active if conversion fails.</p>
-        <form method="POST" action="/admin/flipbooks/{{.Flipbook.ID}}/replace" enctype="multipart/form-data" class="inline-form">
+        <form method="POST" action="/admin/flipbooks/{{.Flipbook.ID}}/replace" enctype="multipart/form-data" class="inline-form" data-replace-form>
             {{template "admin_csrf" .}}
             <div class="form-group"><label for="replacement-file">Replacement document</label><input type="file" id="replacement-file" name="file" accept=".pdf,.ppt,.pptx,.doc,.docx,.odt,.odp,.rtf" required></div>
             <button type="submit" class="btn">Upload replacement</button>
+            <p class="field-help" data-replace-status aria-live="polite"></p>
         </form>
         <form method="POST" action="/admin/flipbooks/{{.Flipbook.ID}}/reconvert" class="inline-form">{{template "admin_csrf" .}}<button type="submit" class="btn">Reconvert current source</button></form>
     </section>
