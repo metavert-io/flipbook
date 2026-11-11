@@ -46,6 +46,11 @@ func (h *ViewerHandler) SetBilling(bc *saas.BillingChecker) {
 }
 
 func (h *ViewerHandler) View(w http.ResponseWriter, r *http.Request) {
+	w.Header().Add("Vary", fetchMetadataVary)
+	if framedByAnotherSite(r) {
+		redirectToEmbed(w, r, chi.URLParam(r, "slug"))
+		return
+	}
 	h.serve(w, r, false)
 }
 

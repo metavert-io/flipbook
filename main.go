@@ -507,10 +507,8 @@ func setupAdminMode(r chi.Router, cfg *config.Config, db *database.DB, store *st
 		r.Delete("/api/flipbooks/{id}", apiH.DeleteFlipbook)
 	})
 
-	// Root redirect
-	r.Get("/", func(rw http.ResponseWriter, req *http.Request) {
-		http.Redirect(rw, req, "/admin", http.StatusFound)
-	})
+	// Root redirect; another site framing the root gets a frameable hint instead.
+	r.Method(http.MethodGet, "/", handlers.EmbedAddressHint(http.RedirectHandler("/admin", http.StatusFound), tmpl, cfg.BaseURL))
 
 	log.Printf("Admin UI:  %s/admin", cfg.BaseURL)
 	log.Printf("API key:   %s", apiKeyStatus(cfg))
@@ -633,17 +631,21 @@ func setupSaaSMode(r chi.Router, cfg *config.Config, db *database.DB, store *sto
 			"/p/*",
 		}
 		for _, route := range spaRoutes {
+			if route == "/" {
+				r.Handle(route, handlers.EmbedAddressHint(spa, tmpl, cfg.BaseURL))
+				continue
+			}
 			r.Handle(route, spa)
 		}
 		// Static assets from the SPA build (JS, CSS, etc.)
 		r.Handle("/assets/*", http.StripPrefix("", http.FileServer(http.Dir(cfg.SaaS.FrontendDir))))
 	} else {
 		// Fallback landing page when no SPA frontend is configured
-		r.Get("/", func(rw http.ResponseWriter, req *http.Request) {
+		r.Method(http.MethodGet, "/", handlers.EmbedAddressHint(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
 			tmpl.ExecuteTemplate(rw, "landing", map[string]interface{}{
 				"Year": time.Now().Year(),
 			})
-		})
+		}), tmpl, cfg.BaseURL))
 	}
 
 	log.Printf("SaaS mode enabled (grace period: %d days)", cfg.SaaS.GracePeriodDays)

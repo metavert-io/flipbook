@@ -150,6 +150,8 @@ The `/embed/{slug}` endpoint replaces the site-wide `X-Frame-Options: SAMEORIGIN
 
 Error pages under `/embed/` use the same policy, so a blocked embed shows its reason inside the iframe instead of the browser's "refused to connect".
 
+Pasting the wrong address into a hand-written iframe is handled too. A viewer URL (`/v/{slug}`) framed by another site is redirected to `/embed/{slug}`, query string included, and gets the publication's normal embed policy. The bare domain framed by another site shows a short notice that names the `/embed/` address instead of redirecting to the admin sign-in. Both rely on the browser's `Sec-Fetch-Dest`/`Sec-Fetch-Site` headers. Browsers that don't send those headers get the standalone pages, which can't be framed, so `/embed/{slug}` is still the address to use.
+
 ### API
 
 All API routes require a bearer token. The API key is logged at server startup (auto-generated if not set in config).
