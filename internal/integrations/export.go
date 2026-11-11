@@ -227,6 +227,7 @@ func (s *Service) ExportAndReupload(ctx context.Context, request ExportRequest) 
 		flipbook.ExternalSource = request.Provider
 		flipbook.ExternalID = request.ExternalID
 		flipbook.SourceChecksum = upload.SHA256
+		flipbook.Embed = models.DefaultEmbedSettings()
 		if err := s.store.CreateFlipbookContext(ctx, flipbook); err != nil {
 			_ = s.assets.DeleteFlipbookContext(context.WithoutCancel(ctx), flipbook.ID)
 			return nil, err

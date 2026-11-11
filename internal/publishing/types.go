@@ -146,6 +146,8 @@ func (d Decision) Headers() http.Header {
 		headers.Set("X-Robots-Tag", "noindex, nofollow, noarchive")
 	}
 	if d.FrameAncestors != "" {
+		// Callers must also drop the global X-Frame-Options: SAMEORIGIN so no
+		// browser is left to resolve the conflict (see handlers.allowFraming).
 		headers.Set("Content-Security-Policy", "frame-ancestors "+d.FrameAncestors)
 	}
 	if cache != CachePublicImmutable && cache != CachePublicReload {

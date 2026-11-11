@@ -255,10 +255,65 @@ func TestDecisionCacheAndHeaders(t *testing.T) {
 	input.ViaEmbed = true
 	input.Flipbook.Embed.AllowedDomains = []string{"example.com"}
 	embed := EvaluateAccess(input)
-	if got := embed.Headers().Get("Content-Security-Policy"); got != "frame-ancestors 'self' https://example.com" {
+	if got := embed.Headers().Get("Content-Security-Policy"); got != "frame-ancestors 'self' https://example.com https://www.example.com" {
 		t.Fatalf("embed CSP = %q", got)
 	}
 	if !embed.NoIndex {
 		t.Fatal("embed must be noindex")
+	}
+}
+
+func TestFrameAncestorsCoversWWWForBareApex(t *testing.T) {
+	tests := []struct {
+		domains []string
+		want    string
+	}{
+		{nil, "*"},
+		{[]string{"penninn.is"}, "'self' https://penninn.is https://www.penninn.is"},
+		{[]string{"www.penninn.is"}, "'self' https://www.penninn.is"},
+		{[]string{"shop.penninn.is"}, "'self' https://shop.penninn.is"},
+		{[]string{"*.penninn.is"}, "'self' https://*.penninn.is"},
+		{[]string{"https://penninn.is"}, "'self' https://penninn.is"},
+		{[]string{"example.co.uk"}, "'self' https://example.co.uk"},
+	}
+	for _, test := range tests {
+		if got := FrameAncestors(test.domains); got != test.want {
+			t.Errorf("FrameAncestors(%v) = %q, want %q", test.domains, got, test.want)
+		}
+	}
+}
+
+func TestEmbedHostAllowedMatchesFrameAncestors(t *testing.T) {
+	tests := []struct {
+		host    string
+		domains []string
+		allowed bool
+	}{
+		{"https://www.penninn.is/", []string{"penninn.is"}, true},
+		{"https://penninn.is/", []string{"penninn.is"}, true},
+		{"https://www.penninn.is/", []string{"https://penninn.is"}, false},
+		{"https://shop.penninn.is/", []string{"penninn.is"}, false},
+		{"https://www.evilpenninn.is/", []string{"penninn.is"}, false},
+		{"https://www.penninn.is.evil.com/", []string{"penninn.is"}, false},
+		{"", []string{"penninn.is"}, true},
+	}
+	for _, test := range tests {
+		if got := embedHostAllowed(test.host, test.domains); got != test.allowed {
+			t.Errorf("embedHostAllowed(%q, %v) = %v, want %v", test.host, test.domains, got, test.allowed)
+		}
+	}
+}
+
+func TestDefaultEmbedSettingsAllowAnonymousEmbed(t *testing.T) {
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	input := policyFixture(now)
+	input.Flipbook.Embed = models.DefaultEmbedSettings()
+	input.Resource, input.ViaEmbed = ResourceEmbed, true
+	if decision := EvaluateAccess(input); !decision.Allowed || decision.FrameAncestors != "*" {
+		t.Fatalf("default embed settings must allow anonymous embedding anywhere: %+v", decision)
+	}
+	input.Flipbook.Embed = models.EmbedSettings{}
+	if decision := EvaluateAccess(input); decision.Allowed || decision.Reason != CodeEmbedDisabled {
+		t.Fatalf("zero embed settings must stay disabled: %+v", decision)
 	}
 }

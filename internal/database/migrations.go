@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/metavert-io/flipbook/internal/models"
@@ -17,7 +18,22 @@ type schemaMigration struct {
 }
 
 func (d *DB) Migrate(ctx context.Context) error {
-	const version = "001_foundation"
+	migrations := []struct {
+		version string
+		apply   func(context.Context) error
+	}{
+		{"001_foundation", d.migrateFoundation},
+		{"002_embed_defaults", d.migrateEmbedDefaults},
+	}
+	for _, migration := range migrations {
+		if err := d.applyMigration(ctx, migration.version, migration.apply); err != nil {
+			return fmt.Errorf("migration %s: %w", migration.version, err)
+		}
+	}
+	return nil
+}
+
+func (d *DB) applyMigration(ctx context.Context, version string, apply func(context.Context) error) error {
 	var applied schemaMigration
 	err := d.schemaMigrations.FindOne(ctx, bson.M{"_id": version}).Decode(&applied)
 	if err == nil {
@@ -26,7 +42,7 @@ func (d *DB) Migrate(ctx context.Context) error {
 	if err != mongo.ErrNoDocuments {
 		return err
 	}
-	if err := d.migrateFoundation(ctx); err != nil {
+	if err := apply(ctx); err != nil {
 		return err
 	}
 	_, err = d.schemaMigrations.InsertOne(ctx, schemaMigration{ID: version, AppliedAt: time.Now().UTC()})
@@ -36,6 +52,45 @@ func (d *DB) Migrate(ctx context.Context) error {
 	return err
 }
 
+// migrateEmbedDefaults turns embedding on where it was never configured.
+// Workspaces were created with zero-value embed settings and every upload
+// copied them, so publications answered 403 embed_disabled to anonymous
+// readers on other sites while the signed-in admin preview worked. A block
+// with embedding off, every display option off and no domain allowlist is
+// that untouched default; anything an admin actually configured is left alone.
+func (d *DB) migrateEmbedDefaults(ctx context.Context) error {
+	unconfigured := func(prefix string) bson.M {
+		notTrue := func(field string) bson.M { return bson.M{prefix + field: bson.M{"$ne": true}} }
+		return bson.M{"$and": bson.A{
+			notTrue("enabled"), notTrue("show_toolbar"), notTrue("show_search"),
+			notTrue("show_share"), notTrue("show_download"),
+			bson.M{prefix + "allowed_domains.0": bson.M{"$exists": false}},
+		}}
+	}
+	defaults := models.DefaultEmbedSettings()
+	enable := func(prefix string) bson.M {
+		return bson.M{
+			prefix + "enabled":      defaults.Enabled,
+			prefix + "show_toolbar": defaults.ShowToolbar,
+			prefix + "show_search":  defaults.ShowSearch,
+		}
+	}
+
+	workspaceSet := enable("settings.embed.")
+	workspaceSet["settings.embed.start_page"] = defaults.StartPage
+	workspaces, err := d.workspaces.UpdateMany(ctx, unconfigured("settings.embed."), bson.M{"$set": workspaceSet})
+	if err != nil {
+		return fmt.Errorf("workspace embed defaults: %w", err)
+	}
+	flipbooks, err := d.flipbooks.UpdateMany(ctx, unconfigured("embed."), bson.M{"$set": enable("embed.")})
+	if err != nil {
+		return fmt.Errorf("flipbook embed defaults: %w", err)
+	}
+	log.Printf("Migration 002_embed_defaults: enabled embedding on %d workspace(s) and %d flipbook(s) that never configured it",
+		workspaces.ModifiedCount, flipbooks.ModifiedCount)
+	return nil
+}
+
 func (d *DB) migrateFoundation(ctx context.Context) error {
 	now := time.Now().UTC()
 	user := models.User{ID: models.LegacyAdminUserID, Name: "Administrator", Locale: "en", CreatedAt: now, UpdatedAt: now}
@@ -43,7 +98,10 @@ func (d *DB) migrateFoundation(ctx context.Context) error {
 	if _, err := d.users.UpdateOne(ctx, bson.M{"_id": user.ID}, bson.M{"$setOnInsert": user}, options.UpdateOne().SetUpsert(true)); err != nil {
 		return fmt.Errorf("default user: %w", err)
 	}
-	workspace := models.Workspace{ID: models.DefaultWorkspaceID, Name: "Default Workspace", OwnerID: user.ID, CreatedAt: now, UpdatedAt: now}
+	workspace := models.Workspace{
+		ID: models.DefaultWorkspaceID, Name: "Default Workspace", OwnerID: user.ID, CreatedAt: now, UpdatedAt: now,
+		Settings: models.WorkspaceSettings{DefaultEmbed: models.DefaultEmbedSettings()},
+	}
 	workspace.ApplyDefaults()
 	if _, err := d.workspaces.UpdateOne(ctx, bson.M{"_id": workspace.ID}, bson.M{"$setOnInsert": workspace}, options.UpdateOne().SetUpsert(true)); err != nil {
 		return fmt.Errorf("default workspace: %w", err)

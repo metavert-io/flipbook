@@ -187,6 +187,7 @@ func (h *SaaSAPIHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		FileSize: header.Size,
 		Status:   models.StatusPending,
 		TenantID: tenantID,
+		Embed:    models.DefaultEmbedSettings(),
 	}
 	if err := h.db.CreateFlipbook(fb); err != nil {
 		log.Printf("Failed to create flipbook: %v", err)

@@ -159,7 +159,10 @@ func (h *AdminHandler) CreateWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := strings.TrimSpace(r.FormValue("name"))
-	workspace := &models.Workspace{Name: name, Slug: models.NormalizeSlug(r.FormValue("slug"))}
+	workspace := &models.Workspace{
+		Name: name, Slug: models.NormalizeSlug(r.FormValue("slug")),
+		Settings: models.WorkspaceSettings{DefaultEmbed: models.DefaultEmbedSettings()},
+	}
 	if name == "" || len(name) > 200 {
 		h.renderWorkspace(w, r, actor, http.StatusBadRequest, map[string]any{"Error": "A workspace name of at most 200 characters is required."})
 		return
