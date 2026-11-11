@@ -274,7 +274,10 @@ document.documentElement.classList.add('js');
             }
             var xhr = new XMLHttpRequest();
             var started = Date.now();
+            var csrf = form.querySelector('input[name="csrf_token"]');
             xhr.open('POST', form.action);
+            // The header lets the server check CSRF without reading the upload body.
+            if (csrf && csrf.value) xhr.setRequestHeader('X-CSRF-Token', csrf.value);
             xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
             xhr.setRequestHeader('Accept', 'application/json');
             xhr.timeout = 30 * 60 * 1000;

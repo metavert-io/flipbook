@@ -51,7 +51,13 @@ func directLoopback(r *http.Request) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
+// formSecurity checks origin and CSRF for the auth forms. Those forms are
+// reachable without a session and a valid CSRF token is free to obtain from
+// GET /login, so the body is capped before anything reads it and parsed in
+// full here: the handlers' FormValue calls would otherwise spool multipart
+// file parts of any size to disk.
 func (a *Auth) formSecurity(w http.ResponseWriter, r *http.Request) (string, error) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxAuthFormBytes)
 	if err := a.validateOrigin(r); err != nil {
 		return "", err
 	}
@@ -59,15 +65,46 @@ func (a *Auth) formSecurity(w http.ResponseWriter, r *http.Request) (string, err
 	if err != nil {
 		return "", err
 	}
-	if err := a.validateCSRF(r); err != nil {
+	if err := a.validateCSRF(w, r); err != nil {
+		return "", err
+	}
+	if err := parseAuthForm(r); err != nil {
 		return "", err
 	}
 	return token, nil
 }
 
+var errMalformedForm = errors.New("malformed form body")
+
+func parseAuthForm(r *http.Request) error {
+	err := r.ParseForm()
+	if err == nil {
+		err = r.ParseMultipartForm(maxAuthFormBytes)
+		if errors.Is(err, http.ErrNotMultipart) {
+			err = nil
+		}
+	}
+	switch {
+	case err == nil:
+		return nil
+	case bodyTooLarge(err):
+		return ErrRequestTooLarge
+	default:
+		return errMalformedForm
+	}
+}
+
 func formSecurityError(w http.ResponseWriter, err error) {
 	if errors.Is(err, ErrInvalidOrigin) || errors.Is(err, ErrInvalidCSRF) {
 		http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+		return
+	}
+	if errors.Is(err, ErrRequestTooLarge) {
+		http.Error(w, http.StatusText(http.StatusRequestEntityTooLarge), http.StatusRequestEntityTooLarge)
+		return
+	}
+	if errors.Is(err, errMalformedForm) {
+		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 		return
 	}
 	http.Error(w, http.StatusText(http.StatusServiceUnavailable), http.StatusServiceUnavailable)

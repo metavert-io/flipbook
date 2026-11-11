@@ -47,6 +47,7 @@ var (
 	ErrForbidden            = errors.New("insufficient permissions")
 	ErrInvalidCSRF          = errors.New("invalid CSRF token")
 	ErrInvalidOrigin        = errors.New("invalid request origin")
+	ErrRequestTooLarge      = errors.New("request body too large")
 	ErrTooManyAttempts      = errors.New("too many login attempts")
 	ErrNotConfigured        = errors.New("authentication is not configured")
 	ErrBootstrapClosed      = errors.New("bootstrap is not available")

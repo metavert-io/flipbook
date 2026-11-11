@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -8,6 +9,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
+	"mime"
+	"mime/multipart"
 	"net"
 	"net/http"
 	"net/url"
@@ -225,29 +229,107 @@ func (a *Auth) CSRFToken(w http.ResponseWriter, r *http.Request) (string, error)
 	return a.ensureCSRF(w, r)
 }
 
-func requestCSRFToken(r *http.Request) (string, error) {
+const (
+	// maxCSRFFormBytes caps a url-encoded body the CSRF check parses into
+	// memory. It matches the largest url-encoded form the admin handlers
+	// accept; the parsed form is what those handlers then read.
+	maxCSRFFormBytes = 2 << 20
+	// maxCSRFMultipartScan is how far into a multipart body the CSRF check
+	// looks for the token. The scanned bytes stay in memory and are replayed
+	// to the handler, so the check never spools file parts to disk and the
+	// handler's own MaxBytesReader still governs the upload size.
+	maxCSRFMultipartScan = 64 << 10
+	maxCSRFTokenBytes    = 256
+	// maxAuthFormBytes caps the whole body of the forms that are reachable
+	// without a session (login, invitation, password reset). They hold a few
+	// short fields.
+	maxAuthFormBytes = 64 << 10
+)
+
+func bodyTooLarge(err error) bool {
+	var maxBytesErr *http.MaxBytesError
+	return errors.As(err, &maxBytesErr)
+}
+
+// replayedBody hands the bytes the CSRF scan already read back to the
+// handler ahead of the unread remainder of the request body.
+type replayedBody struct {
+	io.Reader
+	io.Closer
+}
+
+// requestCSRFToken prefers the X-CSRF-Token header, which leaves the body
+// untouched. Url-encoded bodies are parsed under maxCSRFFormBytes; multipart
+// bodies are scanned without being consumed. Tokens in the URL query are not
+// accepted.
+func requestCSRFToken(w http.ResponseWriter, r *http.Request) (string, error) {
 	if token := strings.TrimSpace(r.Header.Get(CSRFHeaderName)); token != "" {
 		return token, nil
 	}
-	contentType := strings.ToLower(r.Header.Get("Content-Type"))
-	var err error
-	if strings.HasPrefix(contentType, "multipart/form-data") {
-		err = r.ParseMultipartForm(1 << 20)
-	} else {
-		err = r.ParseForm()
-	}
+	mediaType, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if err != nil {
-		return "", err
+		return "", ErrInvalidCSRF
 	}
-	return r.Form.Get(CSRFFormField), nil
+	switch mediaType {
+	case "application/x-www-form-urlencoded":
+		r.Body = http.MaxBytesReader(w, r.Body, maxCSRFFormBytes)
+		if err := r.ParseForm(); err != nil {
+			if bodyTooLarge(err) {
+				return "", ErrRequestTooLarge
+			}
+			return "", ErrInvalidCSRF
+		}
+		return r.PostForm.Get(CSRFFormField), nil
+	case "multipart/form-data":
+		return multipartCSRFToken(r, params["boundary"])
+	default:
+		return "", ErrInvalidCSRF
+	}
 }
 
-func (a *Auth) validateCSRF(r *http.Request) error {
+// multipartCSRFToken finds the token field within the first
+// maxCSRFMultipartScan bytes of a multipart body and then restores the body
+// so the handler can parse it in full. The token must come before any file
+// part; browsers serialize fields in document order and every admin form
+// renders csrf_token first.
+func multipartCSRFToken(r *http.Request, boundary string) (string, error) {
+	if boundary == "" {
+		return "", ErrInvalidCSRF
+	}
+	original := r.Body
+	var scanned bytes.Buffer
+	reader := multipart.NewReader(io.TeeReader(io.LimitReader(original, maxCSRFMultipartScan), &scanned), boundary)
+	defer func() {
+		r.Body = replayedBody{Reader: io.MultiReader(&scanned, original), Closer: original}
+	}()
+	for {
+		part, err := reader.NextPart()
+		if err != nil {
+			return "", ErrInvalidCSRF
+		}
+		if part.FileName() != "" {
+			return "", ErrInvalidCSRF
+		}
+		if part.FormName() != CSRFFormField {
+			continue
+		}
+		value, err := io.ReadAll(io.LimitReader(part, maxCSRFTokenBytes+1))
+		if err != nil || len(value) > maxCSRFTokenBytes {
+			return "", ErrInvalidCSRF
+		}
+		return strings.TrimSpace(string(value)), nil
+	}
+}
+
+func (a *Auth) validateCSRF(w http.ResponseWriter, r *http.Request) error {
 	cookie, err := r.Cookie(CSRFCookieName)
 	if err != nil || !validCSRFCookie(cookie.Value) {
 		return ErrInvalidCSRF
 	}
-	token, err := requestCSRFToken(r)
+	token, err := requestCSRFToken(w, r)
+	if errors.Is(err, ErrRequestTooLarge) {
+		return err
+	}
 	if err != nil || token == "" {
 		return ErrInvalidCSRF
 	}
@@ -278,8 +360,12 @@ func (a *Auth) CSRFMiddleware(next http.Handler) http.Handler {
 			return
 		}
 		if !safeMethod(r.Method) {
-			if err := a.validateCSRF(r); err != nil {
-				http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+			if err := a.validateCSRF(w, r); err != nil {
+				status := http.StatusForbidden
+				if errors.Is(err, ErrRequestTooLarge) {
+					status = http.StatusRequestEntityTooLarge
+				}
+				http.Error(w, http.StatusText(status), status)
 				return
 			}
 		}

@@ -473,11 +473,7 @@ func setupAdminMode(r chi.Router, cfg *config.Config, db *database.DB, store *st
 	r.HandleFunc("/password-reset/confirm", a.PasswordResetHandler)
 	r.HandleFunc("/account/password", a.ChangePasswordHandler)
 
-	// Admin routes (protected)
-	r.Group(func(r chi.Router) {
-		r.Use(a.RequireAuth)
-		adminH.RegisterRoutes(r)
-	})
+	mountAdminRoutes(r, a, adminH)
 
 	// Feature pages: analytics, leads, sales, integrations (session principal
 	// plus CSRF so the templates' forms carry valid tokens).
@@ -485,13 +481,6 @@ func setupAdminMode(r chi.Router, cfg *config.Config, db *database.DB, store *st
 		r.Use(a.RequireAuth)
 		r.Use(a.CSRFMiddleware)
 		registerFeatureRoutes(r, analyticsH, engagementH, salesH, integrationsH)
-	})
-
-	// Settings mutations (session principal + CSRF)
-	r.Group(func(r chi.Router) {
-		r.Use(a.RequireAuth)
-		r.Use(a.CSRFMiddleware)
-		adminH.RegisterSettingsRoutes(r)
 	})
 
 	// Link overlay API for the admin editor (session principal + CSRF)
@@ -521,6 +510,20 @@ func setupAdminMode(r chi.Router, cfg *config.Config, db *database.DB, store *st
 
 	log.Printf("Admin UI:  %s/admin", cfg.BaseURL)
 	log.Printf("API key:   %s", apiKeyStatus(cfg))
+}
+
+// mountAdminRoutes mounts the session-authenticated admin UI and its settings
+// mutations. Every route passes the CSRF check: the session cookie is
+// SameSite=Lax, which does not stop another app on a sibling subdomain from
+// posting forms here. Uploads send the token as X-CSRF-Token so their bodies
+// are left for the handler's own size limit.
+func mountAdminRoutes(r chi.Router, a *auth.Auth, adminH *handlers.AdminHandler) {
+	r.Group(func(r chi.Router) {
+		r.Use(a.RequireAuth)
+		r.Use(a.CSRFMiddleware)
+		adminH.RegisterRoutes(r)
+		adminH.RegisterSettingsRoutes(r)
+	})
 }
 
 // registerFeatureRoutes mounts the analytics, leads, sales, and integrations
