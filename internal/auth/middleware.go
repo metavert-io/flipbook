@@ -22,6 +22,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/metavert-io/flipbook/internal/database"
 	"github.com/metavert-io/flipbook/internal/models"
+	"github.com/metavert-io/flipbook/internal/multipartform"
 )
 
 func (a *Auth) SecurityHeaders(next http.Handler) http.Handler {
@@ -346,6 +347,10 @@ func (a *Auth) validateCSRF(w http.ResponseWriter, r *http.Request) error {
 
 func (a *Auth) CSRFMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// The token check may parse a multipart body, and next receives this
+		// same request, so the form is released here whether the check
+		// rejects it or a handler goes on to use it.
+		defer multipartform.Release(r)
 		_, sessionCookieErr := r.Cookie(SessionCookieName)
 		if !safeMethod(r.Method) && sessionCookieErr != nil && strings.HasPrefix(strings.ToLower(r.Header.Get("Authorization")), "bearer ") {
 			next.ServeHTTP(w, r)

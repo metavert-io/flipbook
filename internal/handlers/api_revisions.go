@@ -10,6 +10,7 @@ import (
 	"github.com/metavert-io/flipbook/internal/converter"
 	"github.com/metavert-io/flipbook/internal/database"
 	"github.com/metavert-io/flipbook/internal/models"
+	"github.com/metavert-io/flipbook/internal/multipartform"
 	"github.com/metavert-io/flipbook/internal/storage"
 	"github.com/metavert-io/flipbook/internal/worker"
 	"go.mongodb.org/mongo-driver/v2/mongo"
@@ -27,6 +28,7 @@ func (h *APIHandler) ReplaceFlipbook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, h.maxUploadBytes+(1<<20))
+	defer multipartform.Release(r)
 	if err := r.ParseMultipartForm(32 << 20); err != nil {
 		invalidAPIRequest(w, "Invalid replacement upload")
 		return
