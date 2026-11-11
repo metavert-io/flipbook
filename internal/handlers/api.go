@@ -307,6 +307,10 @@ func (h *APIHandler) createFlipbookFromSource(r *http.Request, identity *apiIden
 	default:
 		return nil, nil, apiInvalidError("unsupported visibility")
 	}
+	workspace, err := h.db.GetWorkspace(r.Context(), identity.WorkspaceID)
+	if err != nil {
+		return nil, nil, err
+	}
 	id := uuid.NewString()
 	upload, err := h.storage.SaveUploadStream(r.Context(), id, filename, source, h.maxUploadBytes)
 	if err != nil {
@@ -319,6 +323,7 @@ func (h *APIHandler) createFlipbookFromSource(r *http.Request, identity *apiIden
 		Status: models.StatusPending, PublicationState: models.PublicationDraft,
 		Visibility: metadata.Visibility, Tags: tags, CollectionIDs: metadata.CollectionIDs,
 		ExternalSource: metadata.ExternalSource, ExternalID: metadata.ExternalID, Language: metadata.Language,
+		Embed: workspace.Settings.DefaultEmbed,
 	}
 	if err := h.db.CreateFlipbookContext(r.Context(), fb); err != nil {
 		_ = h.storage.DeleteFlipbookContext(context.Background(), id)

@@ -358,3 +358,81 @@ func mustCount(ctx context.Context, t *testing.T, collection *mongo.Collection, 
 	}
 	return count
 }
+
+func TestIntegrationMigrationEnablesUnconfiguredEmbeds(t *testing.T) {
+	uri := integrationURI(t)
+	name := integrationDatabaseName()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	client, err := mongo.Connect(options.Client().ApplyURI(uri))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawDB := client.Database(name)
+	now := time.Now().UTC()
+	zeroEmbed := bson.M{"enabled": false, "start_page": 1, "show_toolbar": false, "show_search": false, "show_share": false, "show_download": false}
+	_, err = rawDB.Collection("workspaces").InsertOne(ctx, bson.M{
+		"_id": models.DefaultWorkspaceID, "slug": models.DefaultWorkspaceID, "name": "Default Workspace",
+		"owner_id": models.LegacyAdminUserID, "created_at": now, "updated_at": now,
+		"settings": bson.M{"embed": zeroEmbed},
+	})
+	if err != nil {
+		_ = client.Disconnect(ctx)
+		t.Fatal(err)
+	}
+	book := func(id string, embed bson.M) bson.M {
+		doc := bson.M{
+			"_id": id, "workspace_id": models.DefaultWorkspaceID, "title": id, "slug": id,
+			"filename": id + ".pdf", "status": models.StatusReady, "created_at": now, "updated_at": now,
+		}
+		if embed != nil {
+			doc["embed"] = embed
+		}
+		return doc
+	}
+	_, err = rawDB.Collection("flipbooks").InsertMany(ctx, []any{
+		book("pre-gate", nil),
+		book("inherited-zero", zeroEmbed),
+		book("deliberately-off", bson.M{"enabled": false, "start_page": 1, "show_toolbar": true, "show_search": true}),
+		book("allowlisted-off", bson.M{"enabled": false, "start_page": 1, "allowed_domains": bson.A{"penninn.is"}}),
+		book("already-on", bson.M{"enabled": true, "start_page": 3, "show_toolbar": false}),
+	})
+	if err != nil {
+		_ = client.Disconnect(ctx)
+		t.Fatal(err)
+	}
+	if err := client.Disconnect(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	db := openIntegrationDB(t, uri, name)
+	workspace, err := db.GetWorkspace(ctx, models.DefaultWorkspaceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := workspace.Settings.DefaultEmbed; !got.Enabled || !got.ShowToolbar || !got.ShowSearch {
+		t.Fatalf("unconfigured workspace embed defaults not enabled: %+v", got)
+	}
+	want := map[string]models.EmbedSettings{
+		"pre-gate":         {Enabled: true, StartPage: 1, ShowToolbar: true, ShowSearch: true},
+		"inherited-zero":   {Enabled: true, StartPage: 1, ShowToolbar: true, ShowSearch: true},
+		"deliberately-off": {Enabled: false, StartPage: 1, ShowToolbar: true, ShowSearch: true},
+		"allowlisted-off":  {Enabled: false, StartPage: 1, AllowedDomains: []string{"penninn.is"}},
+		"already-on":       {Enabled: true, StartPage: 3},
+	}
+	for id, expected := range want {
+		fb, err := db.GetFlipbook(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := fb.Embed
+		if got.Enabled != expected.Enabled || got.StartPage != expected.StartPage || got.ShowToolbar != expected.ShowToolbar ||
+			got.ShowSearch != expected.ShowSearch || got.ShowShare || got.ShowDownload ||
+			strings.Join(got.AllowedDomains, ",") != strings.Join(expected.AllowedDomains, ",") {
+			t.Errorf("%s embed = %+v, want %+v", id, got, expected)
+		}
+	}
+	if err := db.Migrate(ctx); err != nil {
+		t.Fatalf("migration is not idempotent: %v", err)
+	}
+}
