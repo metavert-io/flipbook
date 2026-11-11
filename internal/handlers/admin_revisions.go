@@ -18,6 +18,7 @@ import (
 	"github.com/metavert-io/flipbook/internal/converter"
 	"github.com/metavert-io/flipbook/internal/database"
 	"github.com/metavert-io/flipbook/internal/models"
+	"github.com/metavert-io/flipbook/internal/multipartform"
 	"github.com/metavert-io/flipbook/internal/publishing"
 	"github.com/metavert-io/flipbook/internal/storage"
 	"github.com/metavert-io/flipbook/internal/worker"
@@ -31,6 +32,7 @@ func (h *AdminHandler) Replace(w http.ResponseWriter, r *http.Request) {
 	}
 	id := chi.URLParam(r, "id")
 	r.Body = http.MaxBytesReader(w, r.Body, h.maxBytes+1<<20)
+	defer multipartform.Release(r)
 	if err := r.ParseMultipartForm(8 << 20); err != nil {
 		h.lifecycleError(w, r, actor, id, adminInputf("The replacement upload is invalid or too large."))
 		return
