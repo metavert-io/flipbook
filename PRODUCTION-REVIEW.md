@@ -67,6 +67,9 @@ Deliberate ("upload progress tracking"), and `FlipbookStatus`'s legacy fallback 
 
 **F15 — Repo hygiene leftovers:** `bin/flipbook.exe~` backup binary; `data/tmp/` inside the repo holds the Go toolchain/build cache (gitignored, works, but fragile — document it or move it); module path `github.com/metavert-io/flipbook` and Fly app name `flipbook-metavert` still carry the old identity (already tracked in MEMORY.md — fine to defer).
 
+**F16 — ✅ FIXED 2026-11-11: large admin uploads were cut off by the edge proxy.**
+The live host's edge proxy (Traefik v3 behind Coolify) aborts any request whose body takes longer than 60 seconds to arrive (`entryPoints.*.transport.respondingTimeouts.readTimeout` defaults to `60s`); verified against production with a throttled upload that returned `502` at 60.8 s. The admin UI sent each document as one multipart request, so a 177 MB catalogue needed ~24 Mbit/s of upstream bandwidth to finish in time, and the client then waited up to 30 minutes with no feedback. The admin upload queue and the "Replace source document" form now send documents as resumable chunks through `/admin/uploads` (session + CSRF header): chunks are sized from measured throughput to take ~8 s, a chunk with no progress for 30 s is aborted and retried, and retries resume from the offset the server confirms. Sessions live under `<data>/flipbooks/.upload-sessions/`, expire after 24 h, and are capped at 10 per user. The no-JavaScript form post and the `/api/flipbooks` API upload still use a single request and remain subject to the proxy limit — raise the proxy read timeout too (e.g. `--entrypoints.https.transport.respondingTimeouts.readTimeout=30m` in the Coolify proxy configuration).
+
 ---
 
 ## Launch verdict

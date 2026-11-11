@@ -220,10 +220,11 @@
     <section class="panel" aria-labelledby="replace-heading">
         <h2 id="replace-heading">Replace source document</h2>
         <p class="field-help">A replacement is converted as a new immutable revision. The current live revision stays active if conversion fails.</p>
-        <form method="POST" action="/admin/flipbooks/{{.Flipbook.ID}}/replace" enctype="multipart/form-data" class="inline-form">
+        <form method="POST" action="/admin/flipbooks/{{.Flipbook.ID}}/replace" enctype="multipart/form-data" class="inline-form" data-replace-form>
             {{template "admin_csrf" .}}
             <div class="form-group"><label for="replacement-file">Replacement document</label><input type="file" id="replacement-file" name="file" accept=".pdf,.ppt,.pptx,.doc,.docx,.odt,.odp,.rtf" required></div>
             <button type="submit" class="btn">Upload replacement</button>
+            <p class="field-help" data-replace-status aria-live="polite"></p>
         </form>
         <form method="POST" action="/admin/flipbooks/{{.Flipbook.ID}}/reconvert" class="inline-form">{{template "admin_csrf" .}}<button type="submit" class="btn">Reconvert current source</button></form>
     </section>

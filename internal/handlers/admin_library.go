@@ -1,8 +1,10 @@
 package handlers
 
 import (
+	"errors"
 	"fmt"
 	"io"
+	"log"
 	"math"
 	"mime/multipart"
 	"net/http"
@@ -16,6 +18,7 @@ import (
 	"github.com/metavert-io/flipbook/internal/converter"
 	"github.com/metavert-io/flipbook/internal/database"
 	"github.com/metavert-io/flipbook/internal/models"
+	"github.com/metavert-io/flipbook/internal/storage"
 	"github.com/metavert-io/flipbook/internal/worker"
 )
 
@@ -228,6 +231,10 @@ func (h *AdminHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		h.uploadError(w, r, actor, adminInputf("The upload could not be parsed. Check the total upload size and try again."))
 		return
 	}
+	if uploadID := strings.TrimSpace(r.FormValue("upload_id")); uploadID != "" {
+		h.uploadFromSession(w, r, actor, uploadID)
+		return
+	}
 	if r.MultipartForm == nil {
 		h.uploadError(w, r, actor, adminInputf("Choose at least one document to upload."))
 		return
@@ -269,6 +276,40 @@ func (h *AdminHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		items = append(items, item)
 	}
 	h.respondUploadResults(w, r, actor, items, created)
+}
+
+// uploadFromSession creates a publication from a completed resumable upload.
+// The session is removed afterwards whatever the outcome, so a failed finish
+// never leaves a full-size document behind on disk.
+func (h *AdminHandler) uploadFromSession(w http.ResponseWriter, r *http.Request, actor adminActor, uploadID string) {
+	session, file, err := h.completedUploadSession(actor, uploadID)
+	if err != nil {
+		if errors.Is(err, storage.ErrUploadSessionNotFound) || errors.Is(err, storage.ErrUploadIncomplete) {
+			h.uploadError(w, r, actor, adminInputf("The upload is incomplete or has expired. Upload the document again."))
+			return
+		}
+		h.uploadError(w, r, actor, err)
+		return
+	}
+	defer func() {
+		if err := h.storage.DeleteUploadSession(uploadID); err != nil {
+			log.Printf("upload sessions: delete %s: %v", uploadID, err)
+		}
+	}()
+	item, saveErr := h.saveNewFlipbook(r, actor, r.FormValue("title"), session.Filename, file)
+	closeErr := file.Close()
+	if saveErr == nil && closeErr != nil {
+		saveErr = closeErr
+	}
+	if saveErr != nil {
+		_, message := adminErrorMessage(saveErr)
+		item.Error = message
+	}
+	created := 0
+	if item.ID != "" {
+		created = 1
+	}
+	h.respondUploadResults(w, r, actor, []adminUploadItem{item}, created)
 }
 
 func (h *AdminHandler) uploadError(w http.ResponseWriter, r *http.Request, actor adminActor, err error) {

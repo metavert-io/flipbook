@@ -111,7 +111,7 @@ document.documentElement.classList.add('js');
             });
         });
         document.querySelectorAll('form[method="POST"]').forEach(function (form) {
-            if (form.matches('[data-upload-form], [data-import-form], [data-bulk-form], [data-confirm]')) return;
+            if (form.matches('[data-upload-form], [data-import-form], [data-bulk-form], [data-replace-form], [data-confirm]')) return;
             form.addEventListener('submit', function () {
                 form.setAttribute('aria-busy', 'true');
                 window.setTimeout(function () {
@@ -259,44 +259,203 @@ document.documentElement.classList.add('js');
         return fallback;
     }
 
-    function uploadRequest(form, file, single, row) {
+    // Large documents are sent as a resumable sequence of chunk requests. The
+    // edge proxy aborts any request whose body takes longer than 60 seconds,
+    // so a single 177 MB request fails on anything slower than ~24 Mbit/s.
+    // Each chunk is sized from measured throughput to take about 8 seconds,
+    // a stalled chunk is aborted after 30 seconds without progress, and
+    // failed chunks are retried from the offset the server confirms.
+    var chunkMinBytes = 1048576;
+    var chunkTargetSeconds = 8;
+    var chunkStallTimeout = 30 * 1000;
+    var chunkMaxRetries = 10;
+
+    function csrfTokenFor(form) {
+        var input = form && form.querySelector('input[name="csrf_token"]');
+        return input ? input.value : '';
+    }
+
+    function hiddenFields(form) {
+        var data = new FormData();
+        Array.prototype.slice.call(form.querySelectorAll('input[type="hidden"][name]')).forEach(function (input) {
+            data.append(input.name, input.value);
+        });
+        return data;
+    }
+
+    function requestFailure(message, status, retryable, received) {
+        var error = new Error(message);
+        error.status = status;
+        error.retryable = retryable;
+        error.received = received;
+        return error;
+    }
+
+    function parseJSON(text) {
+        try { return JSON.parse(text); } catch (ignore) { return null; }
+    }
+
+    function sessionRequest(method, url, token, body, onProgress) {
         return new Promise(function (resolve, reject) {
-            var data = file ? new FormData() : new FormData(form);
-            if (file) {
-                Array.prototype.slice.call(form.querySelectorAll('input[type="hidden"][name]')).forEach(function (input) {
-                    data.append(input.name, input.value);
-                });
-                if (single) {
-                    var title = form.querySelector('input[name="title"]');
-                    if (title) data.append('title', title.value);
-                }
-                data.append('file', file, file.name);
-            }
             var xhr = new XMLHttpRequest();
-            var started = Date.now();
+            var lastActivity = Date.now();
+            var stalled = false;
+            var watchdog = window.setInterval(function () {
+                if (Date.now() - lastActivity > chunkStallTimeout) {
+                    stalled = true;
+                    xhr.abort();
+                }
+            }, 1000);
+            xhr.open(method, url);
+            xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
+            xhr.setRequestHeader('Accept', 'application/json');
+            xhr.setRequestHeader('X-CSRF-Token', token);
+            var isBlob = typeof Blob !== 'undefined' && body instanceof Blob;
+            if (body) xhr.setRequestHeader('Content-Type', isBlob ? 'application/octet-stream' : 'application/json');
+            xhr.upload.addEventListener('progress', function (event) {
+                lastActivity = Date.now();
+                if (onProgress) onProgress(event.loaded);
+            });
+            xhr.upload.addEventListener('load', function () { lastActivity = Date.now(); });
+            xhr.addEventListener('load', function () {
+                window.clearInterval(watchdog);
+                var response = parseJSON(xhr.responseText);
+                if (xhr.status >= 200 && xhr.status < 300) {
+                    if (response || xhr.status === 204) {
+                        resolve(response || {});
+                        return;
+                    }
+                    // An expired sign-in redirects to the HTML login page.
+                    reject(requestFailure('Your sign-in has expired. Sign in again in another tab, then retry the upload.', xhr.status, false));
+                    return;
+                }
+                var message = response && response.error ? response.error : 'The upload request failed with HTTP ' + xhr.status + '.';
+                if (xhr.status === 403 && !(response && response.error)) message = 'The security token was rejected. Reload the page and upload again.';
+                var retryable = xhr.status === 408 || xhr.status === 409 || xhr.status === 429 || xhr.status >= 500;
+                reject(requestFailure(message, xhr.status, retryable, response && Number.isFinite(response.received) ? response.received : null));
+            });
+            xhr.addEventListener('error', function () {
+                window.clearInterval(watchdog);
+                reject(requestFailure('The connection was interrupted.', 0, true));
+            });
+            xhr.addEventListener('abort', function () {
+                window.clearInterval(watchdog);
+                reject(requestFailure(stalled ? 'The connection stalled.' : 'The upload was cancelled.', 0, stalled));
+            });
+            xhr.send(body ? (isBlob ? body : JSON.stringify(body)) : null);
+        });
+    }
+
+    // Uploads file in chunks and resolves with the completed upload session ID.
+    // onProgress receives the bytes the server has confirmed plus the bytes of
+    // the chunk in flight; onStatus receives retry notices.
+    function uploadInChunks(form, file, onProgress, onStatus) {
+        var token = csrfTokenFor(form);
+        var sessionURL = null;
+        return sessionRequest('POST', '/admin/uploads', token, { filename: file.name, size: file.size }).then(function (session) {
+            sessionURL = session.url || '/admin/uploads/' + encodeURIComponent(session.id);
+            var chunkSize = session.chunk_size || 4 * chunkMinBytes;
+            var maxChunk = session.max_chunk_size || 32 * chunkMinBytes;
+            var offset = session.received || 0;
+            var failures = 0;
+            function next() {
+                if (offset >= file.size) return session.id;
+                var start = offset;
+                var end = Math.min(file.size, start + chunkSize);
+                var started = Date.now();
+                return sessionRequest('PUT', sessionURL + '?offset=' + start, token, file.slice(start, end), function (loaded) {
+                    onProgress(start + Math.min(loaded, end - start));
+                }).then(function (status) {
+                    failures = 0;
+                    var seconds = Math.max((Date.now() - started) / 1000, 0.05);
+                    var fitted = Math.floor(((end - start) / seconds) * chunkTargetSeconds / chunkMinBytes) * chunkMinBytes;
+                    chunkSize = Math.max(chunkMinBytes, Math.min(maxChunk, chunkSize * 2, fitted));
+                    offset = status.received;
+                    onProgress(offset);
+                    return next();
+                }, function (error) {
+                    if (!error.retryable) throw error;
+                    failures += 1;
+                    if (failures > chunkMaxRetries) {
+                        throw requestFailure(error.message + ' The upload stopped after ' + chunkMaxRetries + ' retries; check your connection and upload the file again.', error.status, false);
+                    }
+                    chunkSize = Math.max(chunkMinBytes, Math.floor(chunkSize / 2 / chunkMinBytes) * chunkMinBytes);
+                    var wait = Math.min(30, Math.pow(2, failures - 1));
+                    onStatus(error.message + ' Retrying in ' + wait + 's (' + failures + '/' + chunkMaxRetries + ')…');
+                    return delay(wait * 1000).then(function () {
+                        return sessionRequest('GET', sessionURL, token).then(function (current) {
+                            offset = current.received;
+                        }, function (statusError) {
+                            if (!statusError.retryable) throw statusError;
+                        });
+                    }).then(function () {
+                        onProgress(offset);
+                        return next();
+                    });
+                });
+            }
+            return next();
+        }).catch(function (error) {
+            if (sessionURL) sessionRequest('DELETE', sessionURL, token).catch(function () { /* expires on its own */ });
+            throw error;
+        });
+    }
+
+    function uploadProgressText(loaded, total, started) {
+        var percentage = total > 0 ? Math.min(100, Math.floor((loaded / total) * 100)) : 100;
+        var elapsed = Math.max((Date.now() - started) / 1000, 0.1);
+        var speed = loaded / elapsed;
+        var remaining = speed > 0 ? Math.ceil((total - loaded) / speed) : 0;
+        return {
+            percentage: percentage,
+            detail: formatSize(loaded) + ' of ' + formatSize(total) + (remaining > 1 && loaded < total ? ' · about ' + formatDuration(remaining) + ' remaining' : '')
+        };
+    }
+
+    function formatDuration(seconds) {
+        if (seconds < 90) return seconds + 's';
+        return Math.round(seconds / 60) + ' min';
+    }
+
+    function showUploadProgress(row, loaded, total, started) {
+        var state = uploadProgressText(loaded, total, started);
+        row._uploadCell.textContent = 'Uploading ' + state.percentage + '%';
+        var progress = byId('upload-progress');
+        var fill = byId('progress-fill');
+        var detail = byId('upload-detail');
+        if (progress) {
+            progress.classList.remove('hidden');
+            progress.setAttribute('aria-valuenow', String(state.percentage));
+        }
+        if (fill) fill.style.width = state.percentage + '%';
+        if (detail) detail.textContent = state.detail;
+    }
+
+    function uploadRequest(form, file, single, row) {
+        if (!file) return submitUploadForm(form, new FormData(form), row, 'Downloading from Google Slides');
+        var started = Date.now();
+        return uploadInChunks(form, file, function (loaded) {
+            showUploadProgress(row, loaded, file.size, started);
+        }, function (message) {
+            row._uploadCell.textContent = message;
+        }).then(function (uploadID) {
+            var data = hiddenFields(form);
+            if (single) {
+                var title = form.querySelector('input[name="title"]');
+                if (title) data.append('title', title.value);
+            }
+            data.append('upload_id', uploadID);
+            return submitUploadForm(form, data, row, 'Finishing upload…');
+        });
+    }
+
+    function submitUploadForm(form, data, row, label) {
+        return new Promise(function (resolve, reject) {
+            var xhr = new XMLHttpRequest();
             xhr.open('POST', form.action);
             xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
             xhr.setRequestHeader('Accept', 'application/json');
-            xhr.timeout = 30 * 60 * 1000;
-            xhr.upload.addEventListener('progress', function (event) {
-                if (!event.lengthComputable) return;
-                var percentage = Math.round((event.loaded / event.total) * 100);
-                row._uploadCell.textContent = 'Uploading ' + percentage + '%';
-                var progress = byId('upload-progress');
-                var fill = byId('progress-fill');
-                var detail = byId('upload-detail');
-                if (progress) {
-                    progress.classList.remove('hidden');
-                    progress.setAttribute('aria-valuenow', String(percentage));
-                }
-                if (fill) fill.style.width = percentage + '%';
-                if (detail) {
-                    var elapsed = Math.max((Date.now() - started) / 1000, 0.1);
-                    var speed = event.loaded / elapsed;
-                    var remaining = speed > 0 ? Math.ceil((event.total - event.loaded) / speed) : 0;
-                    detail.textContent = formatSize(event.loaded) + ' of ' + formatSize(event.total) + (remaining > 1 && percentage < 100 ? ' · about ' + remaining + 's remaining' : '');
-                }
-            });
+            xhr.timeout = 10 * 60 * 1000;
             xhr.addEventListener('load', function () {
                 var response = null;
                 try { response = JSON.parse(xhr.responseText); } catch (ignore) { /* handled below */ }
@@ -311,13 +470,61 @@ document.documentElement.classList.add('js');
                 }
                 resolve(item);
             });
-            xhr.addEventListener('error', function () { reject(new Error('Network error during upload. Check your connection before retrying.')); });
+            xhr.addEventListener('error', function () { reject(new Error('Network error while finishing the upload. Check the library before retrying so you do not create duplicates.')); });
             xhr.addEventListener('timeout', function () { reject(new Error('Upload timed out. Check the library before retrying so you do not create duplicates.')); });
             xhr.addEventListener('abort', function () { reject(new Error('Upload was cancelled.')); });
-            if (!file) {
-                row._uploadCell.textContent = 'Downloading from Google Slides';
-            }
+            row._uploadCell.textContent = label;
             xhr.send(data);
+        });
+    }
+
+    function initReplaceUpload() {
+        var form = document.querySelector('[data-replace-form]');
+        if (!form) return;
+        var input = form.querySelector('input[type="file"]');
+        var status = form.querySelector('[data-replace-status]');
+        var button = form.querySelector('button[type="submit"]');
+        function say(text) {
+            if (status) status.textContent = text;
+        }
+        form.addEventListener('submit', function (event) {
+            if (!input || !input.files || !input.files.length) return;
+            event.preventDefault();
+            clearClientMessages();
+            var file = input.files[0];
+            var started = Date.now();
+            if (button) button.disabled = true;
+            input.disabled = true;
+            form.setAttribute('aria-busy', 'true');
+            say('Uploading 0%');
+            uploadInChunks(form, file, function (loaded) {
+                var state = uploadProgressText(loaded, file.size, started);
+                say('Uploading ' + state.percentage + '% · ' + state.detail);
+            }, say).then(function (uploadID) {
+                say('Finishing upload…');
+                var data = hiddenFields(form);
+                data.append('upload_id', uploadID);
+                return fetch(form.action, {
+                    method: 'POST', body: data, credentials: 'same-origin',
+                    headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' }
+                }).then(function (response) {
+                    return response.json().catch(function () { return null; }).then(function (body) {
+                        if (!response.ok || !body || !body.id) {
+                            throw new Error(body && body.error ? body.error : 'The replacement could not be saved (HTTP ' + response.status + '). Reload the page to check its revisions before retrying.');
+                        }
+                        return body;
+                    });
+                });
+            }).then(function (body) {
+                say('Uploaded. Conversion has started.');
+                window.location.href = '/admin/flipbooks/' + encodeURIComponent(body.id) + '?notice=' + encodeURIComponent('Replacement uploaded. The current version remains live until conversion succeeds.');
+            }).catch(function (error) {
+                say('');
+                showClientError(error.message);
+                if (button) button.disabled = false;
+                input.disabled = false;
+                form.removeAttribute('aria-busy');
+            });
         });
     }
 
@@ -604,6 +811,7 @@ document.documentElement.classList.add('js');
         initCopyButtons();
         initBulkActions();
         initUploadQueue();
+        initReplaceUpload();
         initDetailPolling();
         initEmbedConfigurator();
     }

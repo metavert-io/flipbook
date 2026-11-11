@@ -494,6 +494,15 @@ func setupAdminMode(r chi.Router, cfg *config.Config, db *database.DB, store *st
 		adminH.RegisterSettingsRoutes(r)
 	})
 
+	// Resumable chunked uploads (session principal + CSRF header). Large
+	// documents are sent in short requests so none outlives the edge proxy's
+	// request read timeout.
+	r.Group(func(r chi.Router) {
+		r.Use(a.RequireAuth)
+		r.Use(a.CSRFMiddleware)
+		adminH.RegisterUploadSessionRoutes(r)
+	})
+
 	// Link overlay API for the admin editor (session principal + CSRF)
 	r.Group(func(r chi.Router) {
 		r.Use(a.RequireAuth)
