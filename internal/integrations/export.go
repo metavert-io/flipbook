@@ -187,7 +187,13 @@ func (s *Service) ExportAndReupload(ctx context.Context, request ExportRequest) 
 	if title == "" {
 		title = providerDisplayName(request.Provider) + " document " + truncateIntegrationText(request.ExternalID, 64)
 	}
+	var defaults models.FlipbookDefaults
 	if isNew {
+		workspace, err := s.store.GetWorkspace(ctx, request.WorkspaceID)
+		if err != nil {
+			return nil, fmt.Errorf("load workspace defaults: %w", err)
+		}
+		defaults = workspace.NewFlipbookDefaults()
 		slug, err := s.store.GenerateUniqueSlug(ctx, request.WorkspaceID, integrationSlug(title))
 		if err != nil {
 			return nil, err
@@ -227,7 +233,7 @@ func (s *Service) ExportAndReupload(ctx context.Context, request ExportRequest) 
 		flipbook.ExternalSource = request.Provider
 		flipbook.ExternalID = request.ExternalID
 		flipbook.SourceChecksum = upload.SHA256
-		flipbook.Embed = models.DefaultEmbedSettings()
+		defaults.Apply(flipbook)
 		if err := s.store.CreateFlipbookContext(ctx, flipbook); err != nil {
 			_ = s.assets.DeleteFlipbookContext(context.WithoutCancel(ctx), flipbook.ID)
 			return nil, err

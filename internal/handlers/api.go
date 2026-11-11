@@ -299,11 +299,9 @@ func (h *APIHandler) createFlipbookFromSource(r *http.Request, identity *apiIden
 	if metadata.Language == "" {
 		metadata.Language = "en"
 	}
-	if metadata.Visibility == "" {
-		metadata.Visibility = models.VisibilityPublic
-	}
+	// An empty visibility is left for the workspace default to fill in.
 	switch metadata.Visibility {
-	case models.VisibilityPublic, models.VisibilityUnlisted, models.VisibilityPrivate, models.VisibilityTeam, models.VisibilityPassword, models.VisibilityToken:
+	case "", models.VisibilityPublic, models.VisibilityUnlisted, models.VisibilityPrivate, models.VisibilityTeam, models.VisibilityPassword, models.VisibilityToken:
 	default:
 		return nil, nil, apiInvalidError("unsupported visibility")
 	}
@@ -316,15 +314,7 @@ func (h *APIHandler) createFlipbookFromSource(r *http.Request, identity *apiIden
 	if err != nil {
 		return nil, nil, err
 	}
-	fb := &models.Flipbook{
-		ID: id, WorkspaceID: identity.WorkspaceID, OwnerID: identity.UserID,
-		Title: strings.TrimSpace(metadata.Title), Slug: slug, Description: metadata.Description,
-		Filename: filename, FileSize: upload.Size, SourceChecksum: upload.SHA256,
-		Status: models.StatusPending, PublicationState: models.PublicationDraft,
-		Visibility: metadata.Visibility, Tags: tags, CollectionIDs: metadata.CollectionIDs,
-		ExternalSource: metadata.ExternalSource, ExternalID: metadata.ExternalID, Language: metadata.Language,
-		Embed: workspace.Settings.DefaultEmbed,
-	}
+	fb := newAPIFlipbook(workspace, identity, id, filename, slug, upload, tags, metadata)
 	if err := h.db.CreateFlipbookContext(r.Context(), fb); err != nil {
 		_ = h.storage.DeleteFlipbookContext(context.Background(), id)
 		return nil, nil, err
@@ -342,6 +332,22 @@ func (h *APIHandler) createFlipbookFromSource(r *http.Request, identity *apiIden
 		return nil, nil, fmt.Errorf("queue conversion: %w", err)
 	}
 	return fb, job, nil
+}
+
+// newAPIFlipbook builds the record for an API-created publication. Download,
+// embed and share come from the workspace defaults exactly as for admin
+// uploads; visibility only when the caller did not send one.
+func newAPIFlipbook(workspace *models.Workspace, identity *apiIdentity, id, filename, slug string, upload storage.UploadInfo, tags []string, metadata uploadMetadata) *models.Flipbook {
+	fb := &models.Flipbook{
+		ID: id, WorkspaceID: identity.WorkspaceID, OwnerID: identity.UserID,
+		Title: strings.TrimSpace(metadata.Title), Slug: slug, Description: metadata.Description,
+		Filename: filename, FileSize: upload.Size, SourceChecksum: upload.SHA256,
+		Status: models.StatusPending, PublicationState: models.PublicationDraft,
+		Visibility: metadata.Visibility, Tags: tags, CollectionIDs: metadata.CollectionIDs,
+		ExternalSource: metadata.ExternalSource, ExternalID: metadata.ExternalID, Language: metadata.Language,
+	}
+	workspace.NewFlipbookDefaults().Apply(fb)
+	return fb
 }
 
 // ioReader is kept local to the upload contract so migration clients can use

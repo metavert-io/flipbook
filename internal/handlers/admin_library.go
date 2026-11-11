@@ -398,11 +398,10 @@ func (h *AdminHandler) saveNewFlipbook(r *http.Request, actor adminActor, title,
 	flipbook := &models.Flipbook{
 		ID: id, WorkspaceID: actor.WorkspaceID, OwnerID: actor.UserID, Title: title, Slug: slug,
 		Filename: filename, FileSize: upload.Size, Status: models.StatusPending,
-		PublicationState: models.PublicationDraft, Visibility: workspace.Settings.DefaultVisibility,
-		ReviewState: models.ReviewNotRequired, Download: workspace.Settings.DefaultDownload,
-		Embed: workspace.Settings.DefaultEmbed, Share: workspace.Settings.DefaultShare,
+		PublicationState: models.PublicationDraft, ReviewState: models.ReviewNotRequired,
 		SourceChecksum: upload.SHA256, BackupStatus: "pending",
 	}
+	workspace.NewFlipbookDefaults().Apply(flipbook)
 	if err := h.db.CreateFlipbookContext(r.Context(), flipbook); err != nil {
 		_ = h.storage.DeleteFlipbookContext(r.Context(), id)
 		return item, err
