@@ -18,6 +18,7 @@ import (
 	"github.com/metavert-io/flipbook/internal/converter"
 	"github.com/metavert-io/flipbook/internal/database"
 	"github.com/metavert-io/flipbook/internal/models"
+	"github.com/metavert-io/flipbook/internal/multipartform"
 	"github.com/metavert-io/flipbook/internal/storage"
 	"github.com/metavert-io/flipbook/internal/worker"
 )
@@ -227,6 +228,7 @@ func (h *AdminHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, h.maxBytes+1<<20)
+	defer multipartform.Release(r)
 	if err := r.ParseMultipartForm(8 << 20); err != nil {
 		h.uploadError(w, r, actor, adminInputf("The upload could not be parsed. Check the total upload size and try again."))
 		return

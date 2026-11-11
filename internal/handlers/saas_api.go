@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/metavert-io/flipbook/internal/database"
 	"github.com/metavert-io/flipbook/internal/models"
+	"github.com/metavert-io/flipbook/internal/multipartform"
 	"github.com/metavert-io/flipbook/internal/saas"
 	"github.com/metavert-io/flipbook/internal/storage"
 	"github.com/metavert-io/flipbook/internal/worker"
@@ -144,7 +145,8 @@ func (h *SaaSAPIHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, h.maxUploadSize+(1<<20))
 
 	// Keep at most 32MB in memory; larger files spill to a temp file instead
-	// of being buffered whole in RAM.
+	// of being buffered whole in RAM, and the temp file goes when we return.
+	defer multipartform.Release(r)
 	if err := r.ParseMultipartForm(32 << 20); err != nil {
 		jsonError(w, fmt.Sprintf("File too large (max %dMB)", h.maxUploadSize/(1<<20)), 400)
 		return

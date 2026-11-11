@@ -24,6 +24,7 @@ import (
 	"github.com/metavert-io/flipbook/internal/handlers"
 	"github.com/metavert-io/flipbook/internal/integrations"
 	"github.com/metavert-io/flipbook/internal/mcp"
+	"github.com/metavert-io/flipbook/internal/multipartform"
 	"github.com/metavert-io/flipbook/internal/publishing"
 	"github.com/metavert-io/flipbook/internal/saas"
 	"github.com/metavert-io/flipbook/internal/sales"
@@ -321,6 +322,9 @@ func runServer() {
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Compress(5))
 	r.Use(securityHeaders)
+	// Last, so it sees the request copy the routes receive: chi and Logger
+	// both replace the request, so net/http's own cleanup never applies.
+	r.Use(multipartform.Cleanup)
 
 	// Static files
 	r.Handle("/static/*", http.StripPrefix("/static/", http.FileServer(http.Dir("web/static"))))
