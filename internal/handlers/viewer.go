@@ -82,6 +82,9 @@ func (h *ViewerHandler) serve(w http.ResponseWriter, r *http.Request, embedded b
 	// Billing check for tenant-owned flipbooks (legacy admin flipbooks always served)
 	if fb.TenantID != "" && h.billing != nil {
 		if !h.billing.TenantCanServe(r.Context(), fb.TenantID) {
+			if embedded {
+				allowFraming(w, fb)
+			}
 			_ = readerRender(h.tmpl, w, "unavailable", map[string]interface{}{
 				"Flipbook": fb,
 				"BaseURL":  h.baseURL,
@@ -101,6 +104,9 @@ func (h *ViewerHandler) serve(w http.ResponseWriter, r *http.Request, embedded b
 			if _, statusErr := h.publishing.AuthorizeStatus(r.Context(), workspace.ID, fb.ID, request); statusErr == nil {
 				w.Header().Set("Cache-Control", publishing.CacheNoStore)
 				w.Header().Set("X-Robots-Tag", "noindex, nofollow, noarchive")
+				if embedded {
+					allowFraming(w, fb)
+				}
 				_ = readerRender(h.tmpl, w, "viewer_wait", map[string]any{
 					"Flipbook": fb, "BaseURL": h.baseURL, "Language": distribution.Language(fb.Language),
 					"Direction": distribution.Direction(fb.Language), "Embedded": embedded,
@@ -561,6 +567,9 @@ func (h *ViewerHandler) renderAccessError(w http.ResponseWriter, r *http.Request
 	}
 	w.Header().Set("Cache-Control", publishing.CacheNoStore)
 	w.Header().Set("X-Robots-Tag", "noindex, nofollow, noarchive")
+	if embedded {
+		allowFraming(w, fb)
+	}
 	data := map[string]any{
 		"Flipbook": fb, "Embedded": embedded, "Code": code, "Message": message,
 		"Status": status, "BaseURL": h.baseURL, "Language": "en", "Direction": "ltr",

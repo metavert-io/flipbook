@@ -272,6 +272,7 @@ fieldset.form-group legend { padding: 0 6px; font-size: 0.86rem; font-weight: 70
 .flash { padding: 14px 16px; margin-bottom: 18px; border: 1px solid var(--info-line); border-radius: 10px; background: var(--info-soft); color: var(--info); font-size: 0.9rem; overflow-wrap: anywhere; }
 .flash-success { border-color: var(--success-line); background: var(--success-soft); color: var(--success); }
 .flash-error { border-color: var(--danger-line); background: var(--danger-soft); color: var(--danger); }
+.flash-warning { border-color: var(--warning-line); background: var(--warning-soft); color: var(--warning); }
 .secret-reveal { border-width: 2px; }
 .secret-reveal h2 { color: inherit; }
 .status-card { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 16px; padding: 16px 20px; margin-bottom: 22px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--card-bg); box-shadow: var(--shadow-sm); }

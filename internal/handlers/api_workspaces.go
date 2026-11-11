@@ -57,7 +57,10 @@ func (h *APIHandler) CreateWorkspace(w http.ResponseWriter, r *http.Request) {
 		invalidAPIRequest(w, "workspace name is required")
 		return
 	}
-	workspace := &models.Workspace{Name: strings.TrimSpace(*request.Name), OwnerID: identity.UserID}
+	workspace := &models.Workspace{
+		Name: strings.TrimSpace(*request.Name), OwnerID: identity.UserID,
+		Settings: models.WorkspaceSettings{DefaultEmbed: models.DefaultEmbedSettings()},
+	}
 	if request.Slug != nil {
 		workspace.Slug = models.NormalizeSlug(*request.Slug)
 	}

@@ -103,6 +103,23 @@ func applyPublishingHeaders(w http.ResponseWriter, decision publishing.Decision)
 			w.Header().Add(key, value)
 		}
 	}
+	if decision.FrameAncestors != "" {
+		w.Header().Del("X-Frame-Options")
+	}
+}
+
+// allowFraming lets an /embed response that is not the reader itself (error,
+// password, wait and unavailable pages) render inside the host site's iframe
+// under the publication's own frame-ancestors policy. Without it the global
+// X-Frame-Options: SAMEORIGIN makes the browser show "refused to connect"
+// and hides the actual reason from the reader and the site owner.
+func allowFraming(w http.ResponseWriter, fb *models.Flipbook) {
+	var domains []string
+	if fb != nil {
+		domains = fb.Embed.AllowedDomains
+	}
+	w.Header().Del("X-Frame-Options")
+	w.Header().Set("Content-Security-Policy", "frame-ancestors "+publishing.FrameAncestors(domains))
 }
 
 func writePublishingError(w http.ResponseWriter, err error) {

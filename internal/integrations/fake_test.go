@@ -19,6 +19,7 @@ import (
 type fakeStore struct {
 	mu           sync.Mutex
 	connections  map[string]*models.IntegrationConnection
+	workspaces   map[string]*models.Workspace
 	flipbooks    map[string]*models.Flipbook
 	revisions    map[string]*models.Revision
 	webhooks     map[string]*models.WebhookSubscription
@@ -29,6 +30,10 @@ type fakeStore struct {
 
 func newFakeStore() *fakeStore {
 	return &fakeStore{
+		// Matches a workspace created through the admin or API handlers.
+		workspaces: map[string]*models.Workspace{
+			"workspace": {ID: "workspace", Settings: models.WorkspaceSettings{DefaultEmbed: models.DefaultEmbedSettings()}},
+		},
 		connections: make(map[string]*models.IntegrationConnection),
 		flipbooks:   make(map[string]*models.Flipbook),
 		revisions:   make(map[string]*models.Revision),
@@ -120,6 +125,17 @@ func (f *fakeStore) GetFlipbookByExternalID(_ context.Context, workspaceID, sour
 		}
 	}
 	return nil, database.ErrNotFound
+}
+
+func (f *fakeStore) GetWorkspace(_ context.Context, workspaceID string) (*models.Workspace, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	workspace := f.workspaces[workspaceID]
+	if workspace == nil {
+		return nil, database.ErrNotFound
+	}
+	clone := *workspace
+	return &clone, nil
 }
 
 func (f *fakeStore) CreateFlipbookContext(_ context.Context, flipbook *models.Flipbook) error {

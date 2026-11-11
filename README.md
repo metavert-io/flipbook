@@ -142,7 +142,13 @@ If you prefer to embed a flipbook in an existing page, use the iframe embed code
 </iframe>
 ```
 
-The `/embed/{slug}` endpoint sets permissive frame headers (`X-Frame-Options: ALLOWALL`) so it can be embedded on any domain.
+The `/embed/{slug}` endpoint replaces the site-wide `X-Frame-Options: SAMEORIGIN` with `Content-Security-Policy: frame-ancestors`, taken from the publication's **Embed behavior** settings:
+
+- **Allow public embedding** must be on, or anonymous readers get "Embedding is disabled". New publications start with it on; the admin preview works either way because staff bypass the check.
+- **Allowed frame-ancestor domains** empty means any site may embed. A bare `example.com` also covers `www.example.com`; use `*.example.com` for every subdomain, or `https://host` for one exact origin.
+- The publication must be published with public or unlisted visibility.
+
+Error pages under `/embed/` use the same policy, so a blocked embed shows its reason inside the iframe instead of the browser's "refused to connect".
 
 ### API
 

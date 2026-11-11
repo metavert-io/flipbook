@@ -189,6 +189,7 @@ type Store interface {
 	ListIntegrationConnections(ctx context.Context, workspaceID, userID string) ([]*models.IntegrationConnection, error)
 	DisconnectIntegrationConnection(ctx context.Context, workspaceID, connectionID string) error
 
+	GetWorkspace(ctx context.Context, workspaceID string) (*models.Workspace, error)
 	GetFlipbookByExternalID(ctx context.Context, workspaceID, source, externalID string) (*models.Flipbook, error)
 	CreateFlipbookContext(ctx context.Context, flipbook *models.Flipbook) error
 	CreateRevision(ctx context.Context, revision *models.Revision) error
